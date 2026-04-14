@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 analyze-mit = "mit_analyzer:main"
+compress-pdf = "pdf_compress:main"
 
 [build-system]
 requires = ["hatchling"]

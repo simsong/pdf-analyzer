@@ -4,14 +4,21 @@ import logging
 import os
 import shelve
 import time
-from functools import cached_property
 from pathlib import Path
 
 from google import genai
 from google.genai import errors, types
 from google.genai.types import File, GenerateContentResponseUsageMetadata
 from pydantic import BaseModel, Field
-from pypdf import PdfReader
+
+from pdf_tools import (
+    DEFAULT_JPEG_QUALITY,
+    PDFInspector,
+    CompressionCandidate,
+    choose_pdf_candidates,
+    ensure_pdf_exists,
+    human_size,
+)
 
 
 PROMPT = (
@@ -24,7 +31,6 @@ DEFAULT_MODEL = "gemini-3-flash-preview"
 DEFAULT_CACHE = "google_cache.shelf"
 DEFAULT_OUTPUT_JSONL = "output.jsonl"
 DEFAULT_COST_CSV = "cost.csv"
-PDF_SIZE_LIMIT_BYTES = 50 * 1024 * 1024
 CACHE_TTL_SECONDS = 47 * 3600
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -47,6 +53,7 @@ class AnalysisResult(BaseModel):
 
 class ArchiveEntry(BaseModel):
     filename: str
+    analyzed_filename: str
     page_count: int | None = None
     timestamp: float
     processing_time: float
@@ -54,32 +61,15 @@ class ArchiveEntry(BaseModel):
     usage: GenerateContentResponseUsageMetadata | None = None
     model_version: str
     uploaded_filename: str
-    uploaded_bytes: int
-
-
-class PDFInspector:
-    def __init__(self, pdf_path: Path):
-        self.pdf_path = pdf_path
-
-    @cached_property
-    def file_size(self) -> int:
-        return self.pdf_path.stat().st_size
-
-    @cached_property
-    def page_count(self) -> int | None:
-        try:
-            reader = PdfReader(str(self.pdf_path))
-        except Exception as exc:
-            logger.warning("Could not inspect %s with pypdf: %s", self.pdf_path, exc)
-            return None
-        return len(reader.pages)
+    analyzed_bytes: int
+    compression_method: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Analyze an MIT PDF for Louisiana connections via Gemini."
+        description="Analyze MIT PDFs for Louisiana connections via Gemini."
     )
-    parser.add_argument("pdf", help="Path to the PDF file to analyze")
+    parser.add_argument("pdfs", nargs="+", help="Path(s) to PDF files to analyze")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Gemini model name")
     parser.add_argument(
         "--cache",
@@ -100,6 +90,18 @@ def parse_args() -> argparse.Namespace:
         "--list-server-files",
         action="store_true",
         help="List currently active Gemini server-side files before analysis",
+    )
+    parser.add_argument(
+        "--oversize-strategy",
+        choices=["chunk", "auto", "none", "qpdf", "ebook"],
+        default="chunk",
+        help="How to prepare oversized PDFs before sending them to Gemini.",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=DEFAULT_JPEG_QUALITY,
+        help="JPEG quality used by qpdf image optimization.",
     )
     return parser.parse_args()
 
@@ -124,42 +126,6 @@ def list_files_on_server(client: genai.Client) -> None:
             f"- {remote_file.display_name} ({remote_file.name}) | "
             f"Expires: {remote_file.expiration_time}"
         )
-
-
-def ensure_pdf_exists(pdf_path: Path) -> Path:
-    pdf_path = pdf_path.expanduser().resolve()
-    if not pdf_path.exists():
-        raise SystemExit(f"PDF not found: {pdf_path}")
-    if not pdf_path.is_file():
-        raise SystemExit(f"Path is not a file: {pdf_path}")
-    if pdf_path.suffix.lower() != ".pdf":
-        raise SystemExit(f"Expected a PDF file, got: {pdf_path}")
-    return pdf_path
-
-
-def human_size(num_bytes: int) -> str:
-    units = ["B", "KB", "MB", "GB"]
-    size = float(num_bytes)
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{num_bytes} B"
-
-
-def should_skip_pdf(pdf_path: Path, inspector: PDFInspector) -> bool:
-    if inspector.file_size <= PDF_SIZE_LIMIT_BYTES:
-        return False
-
-    page_count = inspector.page_count
-    page_text = f", {page_count} pages" if page_count is not None else ""
-    logger.info(
-        "Skipping %s: %s%s exceeds Gemini's 50 MB PDF limit.",
-        pdf_path,
-        human_size(inspector.file_size),
-        page_text,
-    )
-    return True
 
 
 def get_cached_file(
@@ -200,14 +166,12 @@ def wait_for_file_processing(client: genai.Client, uploaded_file: File) -> File:
 
 
 def analyze_pdf(
-    client: genai.Client, uploaded_file: File, *, model: str
+    client: genai.Client, uploaded_files: list[File], *, model: str, prompt: str
 ) -> tuple[AnalysisResult, types.GenerateContentResponse]:
+    contents: list[types.Part | File] = [types.Part.from_text(text=prompt), *uploaded_files]
     response = client.models.generate_content(
         model=model,
-        contents=[
-            types.Part.from_text(text=PROMPT),
-            uploaded_file,
-        ],
+        contents=contents,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_json_schema=AnalysisResult.model_json_schema(),
@@ -217,9 +181,38 @@ def analyze_pdf(
     return parsed, response
 
 
+def build_analysis_prompt(source_pdf: Path, submitted_pdfs: list[CompressionCandidate]) -> str:
+    if len(submitted_pdfs) == 1:
+        return PROMPT
+
+    chunk_lines = []
+    for index, candidate in enumerate(submitted_pdfs, start=1):
+        if candidate.start_page is not None and candidate.end_page is not None:
+            chunk_lines.append(
+                f"Chunk {index}: file `{candidate.path.name}` contains original pages "
+                f"{candidate.start_page}-{candidate.end_page}."
+            )
+        else:
+            chunk_lines.append(f"Chunk {index}: file `{candidate.path.name}`.")
+
+    chunk_map = "\n".join(chunk_lines)
+    return (
+        f"{PROMPT}\n\n"
+        f"The original document `{source_pdf.name}` has been split into multiple PDF chunks "
+        f"because of file-size limits. Treat all chunks as one continuous document.\n"
+        f"{chunk_map}\n\n"
+        "Return page_numbers using the original document page numbers, not chunk-local page numbers."
+    )
+
+
 def print_result(entry: ArchiveEntry) -> None:
     page_text = entry.page_count if entry.page_count is not None else "?"
     print(f"Filename: {entry.filename} Pages: {page_text} Score: {entry.data.score}")
+    if entry.analyzed_filename != entry.filename:
+        print(
+            f"Submitted PDF: {entry.analyzed_filename} "
+            f"({human_size(entry.analyzed_bytes)}) via {entry.compression_method}"
+        )
     for conn in entry.data.connections:
         print(f"- {conn.who}: {conn.what} ({conn.time_period}) ({conn.page_numbers})")
 
@@ -254,42 +247,122 @@ def append_jsonl(path: Path, entry: ArchiveEntry) -> None:
         handle.write("\n")
 
 
-def main() -> int:
-    args = parse_args()
-    source_pdf = ensure_pdf_exists(Path(args.pdf))
-    inspector = PDFInspector(source_pdf)
+def process_pdf(
+    client: genai.Client | None,
+    source_pdf: Path,
+    *,
+    submitted_pdfs: list[CompressionCandidate],
+    inspector: PDFInspector,
+    model: str,
+    cache_path: str,
+    cost_csv: Path,
+    output_jsonl: Path,
+) -> int:
     page_count = inspector.page_count
-    if should_skip_pdf(source_pdf, inspector):
-        return 0
-
-    api_key = require_api_key()
-    client = build_client(api_key)
-
-    if args.list_server_files:
-        list_files_on_server(client)
+    if client is None:
+        raise SystemExit(
+            "GEMINI_API_KEY is not set. Export it before analyzing PDFs that are within the size limit."
+        )
 
     started = time.time()
-    uploaded_file = get_cached_file(client, source_pdf, shelf_name=args.cache)
-    logger.info("Using Gemini file URI %s", uploaded_file.uri)
-    analysis, response = analyze_pdf(client, uploaded_file, model=args.model)
+    analyzed_names: list[str] = []
+    total_analyzed_bytes = 0
+    uploaded_names: list[str] = []
+    uploaded_files: list[File] = []
+
+    for submitted_pdf in submitted_pdfs:
+        page_label = (
+            f"pages {submitted_pdf.start_page}-{submitted_pdf.end_page}"
+            if submitted_pdf.start_page is not None and submitted_pdf.end_page is not None
+            else submitted_pdf.path.name
+        )
+        logger.info("Uploading %s (%s)", submitted_pdf.path.name, page_label)
+        uploaded_file = get_cached_file(client, submitted_pdf.path, shelf_name=cache_path)
+        uploaded_files.append(uploaded_file)
+        analyzed_names.append(submitted_pdf.path.name)
+        total_analyzed_bytes += submitted_pdf.size_bytes
+        uploaded_names.append(uploaded_file.name or submitted_pdf.path.name)
+
+    for uploaded_file in uploaded_files:
+        logger.info("Using Gemini file URI %s", uploaded_file.uri)
+
+    prompt = build_analysis_prompt(source_pdf, submitted_pdfs)
+    analysis, response = analyze_pdf(client, uploaded_files, model=model, prompt=prompt)
     elapsed = time.time() - started
+
+    if len(submitted_pdfs) == 1:
+        analyzed_filename = analyzed_names[0]
+        uploaded_filename = uploaded_names[0]
+        compression_method = (
+            None if submitted_pdfs[0].method == "original" else submitted_pdfs[0].method
+        )
+        analyzed_bytes = submitted_pdfs[0].size_bytes
+    else:
+        analyzed_filename = f"{source_pdf.stem}_chunk_*.pdf ({len(submitted_pdfs)} chunks)"
+        uploaded_filename = ", ".join(uploaded_names)
+        compression_method = "chunk"
+        analyzed_bytes = total_analyzed_bytes
 
     entry = ArchiveEntry(
         filename=source_pdf.name,
+        analyzed_filename=analyzed_filename,
         page_count=page_count,
         timestamp=time.time(),
         processing_time=elapsed,
         data=analysis,
         usage=response.usage_metadata,
-        model_version=response.model_version or args.model,
-        uploaded_filename=uploaded_file.name or source_pdf.name,
-        uploaded_bytes=source_pdf.stat().st_size,
+        model_version=response.model_version or model,
+        uploaded_filename=uploaded_filename,
+        analyzed_bytes=analyzed_bytes,
+        compression_method=compression_method,
     )
 
     print_result(entry)
-    append_cost_csv(Path(args.cost_csv), entry.usage)
-    append_jsonl(Path(args.output_jsonl), entry)
+    append_cost_csv(cost_csv, entry.usage)
+    append_jsonl(output_jsonl, entry)
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+    client: genai.Client | None = None
+
+    if args.list_server_files:
+        api_key = require_api_key()
+        client = build_client(api_key)
+        list_files_on_server(client)
+
+    cost_csv = Path(args.cost_csv)
+    output_jsonl = Path(args.output_jsonl)
+    exit_code = 0
+    for pdf in args.pdfs:
+        source_pdf = ensure_pdf_exists(Path(pdf))
+        inspector = PDFInspector(source_pdf)
+        submission_pdfs = choose_pdf_candidates(
+            source_pdf,
+            inspector,
+            oversize_strategy=args.oversize_strategy,
+            jpeg_quality=args.jpeg_quality,
+        )
+        if not submission_pdfs:
+            continue
+        if client is None:
+            api_key = require_api_key()
+            client = build_client(api_key)
+        exit_code = max(
+            exit_code,
+            process_pdf(
+                client,
+                source_pdf,
+                submitted_pdfs=submission_pdfs,
+                inspector=inspector,
+                model=args.model,
+                cache_path=args.cache,
+                cost_csv=cost_csv,
+                output_jsonl=output_jsonl,
+            ),
+        )
+    return exit_code
 
 
 if __name__ == "__main__":
