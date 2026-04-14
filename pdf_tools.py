@@ -1,7 +1,6 @@
 import logging
 import shutil
 import subprocess
-from math import ceil
 from dataclasses import dataclass, field
 from functools import cached_property
 from math import sqrt
@@ -12,8 +11,7 @@ from pypdf.generic import ContentStream
 
 
 DEFAULT_JPEG_QUALITY = 75
-PDF_SIZE_LIMIT_BYTES = 50 * 1024 * 1024
-TARGET_CHUNK_BYTES = 25 * 1024 * 1024
+PDF_SIZE_LIMIT_BYTES = 50_000_000
 HIGH_RESOLUTION_DPI = 72.0
 
 logger = logging.getLogger(__name__)
@@ -359,8 +357,8 @@ def build_compressed_path(pdf_path: Path, suffix: str) -> Path:
     return pdf_path.with_name(f"{pdf_path.stem}_{suffix}.pdf")
 
 
-def build_chunk_path(pdf_path: Path, chunk_index: int) -> Path:
-    return pdf_path.with_name(f"{pdf_path.stem}_chunk_{chunk_index:03d}.pdf")
+def build_chunk_path(pdf_path: Path, chunk_id: str) -> Path:
+    return pdf_path.with_name(f"{pdf_path.stem}_chunk_{chunk_id}.pdf")
 
 
 def command_exists(binary: str) -> str | None:
@@ -439,50 +437,124 @@ def run_ghostscript_ebook(source_pdf: Path) -> CompressionCandidate | None:
     )
 
 
-def split_pdf_into_chunks(
-    source_pdf: Path,
-    inspector: PDFInspector,
-    *,
-    target_chunk_bytes: int = TARGET_CHUNK_BYTES,
-) -> list[CompressionCandidate]:
+def write_pdf_range(
+    reader: PdfReader, output_pdf: Path, *, start_page: int, end_page: int
+) -> int:
+    output_pdf.unlink(missing_ok=True)
+    writer = PdfWriter()
+    for page_number in range(start_page - 1, end_page):
+        writer.add_page(reader.pages[page_number])
+    with output_pdf.open("wb") as handle:
+        writer.write(handle)
+    return output_pdf.stat().st_size
+
+
+def split_pdf_into_chunks(source_pdf: Path, inspector: PDFInspector) -> list[CompressionCandidate]:
     if inspector.reader is None or inspector.page_count is None:
         logger.warning("Could not split %s because the PDF could not be read.", source_pdf)
         return []
 
-    chunk_count = max(1, ceil(inspector.file_size / target_chunk_bytes))
-    pages_per_chunk = max(1, ceil(inspector.page_count / chunk_count))
     logger.info(
-        "Splitting %s into %s chunk(s) at roughly %s each.",
+        "Recursively splitting %s until every chunk is under %s.",
         source_pdf.name,
-        chunk_count,
-        human_size(target_chunk_bytes),
+        human_size(PDF_SIZE_LIMIT_BYTES),
     )
 
-    chunks: list[CompressionCandidate] = []
-    chunk_index = 1
-    for start_page in range(1, inspector.page_count + 1, pages_per_chunk):
-        end_page = min(inspector.page_count, start_page + pages_per_chunk - 1)
-        output_pdf = build_chunk_path(source_pdf, chunk_index)
-        output_pdf.unlink(missing_ok=True)
+    chunks = _split_pdf_range(
+        source_pdf,
+        inspector.reader,
+        start_page=1,
+        end_page=inspector.page_count,
+        chunk_id="001",
+        known_size=inspector.file_size,
+        is_root=True,
+    )
+    return chunks or []
 
-        writer = PdfWriter()
-        for page_number in range(start_page - 1, end_page):
-            writer.add_page(inspector.reader.pages[page_number])
-        with output_pdf.open("wb") as handle:
-            writer.write(handle)
 
-        chunks.append(
+def _split_pdf_range(
+    source_pdf: Path,
+    reader: PdfReader,
+    *,
+    start_page: int,
+    end_page: int,
+    chunk_id: str,
+    known_size: int | None = None,
+    is_root: bool = False,
+) -> list[CompressionCandidate] | None:
+    if start_page > end_page:
+        return []
+
+    if known_size is None or not is_root:
+        output_pdf = build_chunk_path(source_pdf, chunk_id)
+        size_bytes = write_pdf_range(reader, output_pdf, start_page=start_page, end_page=end_page)
+    else:
+        output_pdf = source_pdf
+        size_bytes = known_size
+
+    if size_bytes <= PDF_SIZE_LIMIT_BYTES:
+        if is_root:
+            return [
+                CompressionCandidate(
+                    method="original",
+                    path=source_pdf,
+                    size_bytes=size_bytes,
+                    start_page=start_page,
+                    end_page=end_page,
+                )
+            ]
+        return [
             CompressionCandidate(
                 method="chunk",
                 path=output_pdf,
-                size_bytes=output_pdf.stat().st_size,
+                size_bytes=size_bytes,
                 start_page=start_page,
                 end_page=end_page,
             )
-        )
-        chunk_index += 1
+        ]
 
-    return chunks
+    if start_page == end_page:
+        logger.warning(
+            "Page %s of %s still exceeds %s and cannot be split further.",
+            start_page,
+            source_pdf.name,
+            human_size(PDF_SIZE_LIMIT_BYTES),
+        )
+        if not is_root:
+            output_pdf.unlink(missing_ok=True)
+        return None
+
+    midpoint = (start_page + end_page) // 2
+    logger.info(
+        "Chunk %s (%s-%s) is %s; splitting into %s_0 and %s_1.",
+        chunk_id,
+        start_page,
+        end_page,
+        human_size(size_bytes),
+        chunk_id,
+        chunk_id,
+    )
+    left_chunks = _split_pdf_range(
+        source_pdf,
+        reader,
+        start_page=start_page,
+        end_page=midpoint,
+        chunk_id=f"{chunk_id}_0",
+    )
+    right_chunks = _split_pdf_range(
+        source_pdf,
+        reader,
+        start_page=midpoint + 1,
+        end_page=end_page,
+        chunk_id=f"{chunk_id}_1",
+    )
+
+    if not is_root:
+        output_pdf.unlink(missing_ok=True)
+
+    if left_chunks is None or right_chunks is None:
+        return None
+    return [*left_chunks, *right_chunks]
 
 
 def choose_pdf_candidates(

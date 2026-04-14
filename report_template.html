@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #fcfcfd;
+      --bg: #e5e7eb;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #c7ccd4;
+      --accent: #a31f34;
+      --accent-soft: #f4d9de;
+      --panel-soft: rgba(163, 31, 52, 0.08);
+      --panel-white: rgba(255, 255, 255, 0.82);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 2rem;
+      background:
+        radial-gradient(circle at top left, rgba(163, 31, 52, 0.12), transparent 28rem),
+        linear-gradient(180deg, #f3f4f6 0%, #dfe3e8 100%);
+      color: var(--ink);
+      font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+      line-height: 1.45;
+    }
+
+    main {
+      max-width: 72rem;
+      margin: 0 auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 18px 40px rgba(31, 41, 55, 0.10);
+      overflow: hidden;
+    }
+
+    header {
+      padding: 2.5rem 2.5rem 1.5rem;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(135deg, rgba(163, 31, 52, 0.12), rgba(255, 255, 255, 0));
+    }
+
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 2rem;
+      line-height: 1.1;
+    }
+
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.2;
+    }
+
+    .meta {
+      margin: 0.2rem 0;
+      color: var(--muted);
+      font-size: 0.98rem;
+    }
+
+    .summary {
+      padding: 1rem 2.5rem 0;
+      color: var(--muted);
+      font-size: 0.98rem;
+    }
+
+    .connection-list {
+      padding: 1rem 1.5rem 2rem;
+    }
+
+    .connection {
+      margin: 1rem 0;
+      padding: 1.25rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 244, 246, 0.98));
+    }
+
+    .fact {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel-soft);
+    }
+
+    .mention {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel-white);
+    }
+
+    .connection-header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: baseline;
+      margin-bottom: 0.75rem;
+    }
+
+    .year {
+      display: inline-block;
+      min-width: 5rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+      text-align: center;
+      letter-spacing: 0.03em;
+    }
+
+    .who {
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .fact-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      flex: 1 1 28rem;
+    }
+
+    .score {
+      margin-left: auto;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    dl {
+      display: grid;
+      grid-template-columns: 12rem 1fr;
+      gap: 0.45rem 1rem;
+      margin: 0;
+    }
+
+    dt {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    dd {
+      margin: 0;
+    }
+
+    .empty {
+      padding: 2rem 2.5rem 2.5rem;
+      color: var(--muted);
+    }
+
+    @media (max-width: 720px) {
+      body {
+        padding: 1rem;
+      }
+
+      header,
+      .summary,
+      .empty {
+        padding-left: 1.25rem;
+        padding-right: 1.25rem;
+      }
+
+      .connection-list {
+        padding: 1rem;
+      }
+
+      dl {
+        grid-template-columns: 1fr;
+      }
+
+      .score {
+        margin-left: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>{{ title }}</h1>
+      <p class="meta">Generated: {{ generated_at }}</p>
+      <p class="meta">Source archive: {{ source_jsonl }}</p>
+    </header>
+
+    <div class="summary">
+      <p>Total people: {{ connection_count }}</p>
+      <p>Total distinct facts: {{ fact_count }}</p>
+      <p>Total archived mentions: {{ mention_count }}</p>
+      <p>Entries are sorted by the earliest four-digit year found in each connection's <code>time_period</code>.</p>
+    </div>
+
+    {% if connections %}
+    <section class="connection-list">
+      {% for connection in connections %}
+      <article class="connection">
+        <div class="connection-header">
+          <div class="who">{{ connection.who }}</div>
+          <div class="score">
+            Score:
+              {% if connection.scores %}
+                {{ connection.scores | max }}/10
+              {% else %}
+                ?/10
+              {% endif %}
+          </div>
+        </div>
+
+        {% for fact in connection.facts %}
+        <section class="fact">
+          <div class="connection-header">
+            <div class="year">{{ fact.sort_label }}</div>
+            <div class="fact-title">{{ fact.what or "No fact text" }}</div>
+            <div class="score">
+              Score:
+              {% if fact.scores %}
+                {{ fact.scores | max }}/10
+              {% else %}
+                ?/10
+              {% endif %}
+            </div>
+          </div>
+
+          <dl>
+            <dt>Time Periods</dt>
+            <dd>{{ fact.time_periods | join("; ") if fact.time_periods else "Unknown" }}</dd>
+
+            <dt>Page Numbers</dt>
+            <dd>
+              {% if fact.page_numbers %}
+                {{ fact.page_numbers | join(", ") }}
+              {% else %}
+                Unknown
+              {% endif %}
+            </dd>
+
+            <dt>Source Files</dt>
+            <dd>{{ fact.source_files | join(", ") if fact.source_files else "Unknown" }}</dd>
+
+            {% if debug %}
+            <dt>Analyzed Files</dt>
+            <dd>
+              {% for mention in fact.mentions %}
+                {{ mention.analyzed_file }}{% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+            </dd>
+            {% endif %}
+
+            {% if debug %}
+            <dt>Compression Methods</dt>
+            <dd>
+              {% for mention in fact.mentions %}
+                {{ mention.compression_method or "original" }}{% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+            </dd>
+            {% endif %}
+
+            {% if debug %}
+            <dt>Processing Times</dt>
+            <dd>
+              {% for mention in fact.mentions %}
+                {% if mention.processing_time is not none %}
+                  {{ "%.2f"|format(mention.processing_time) }} seconds
+                {% else %}
+                  Unknown
+                {% endif %}
+                {% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+            </dd>
+            {% endif %}
+
+            {% if debug %}
+            <dt>Model Versions</dt>
+            <dd>
+              {% for mention in fact.mentions %}
+                {{ mention.model_version or "Unknown" }}{% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+            </dd>
+            {% endif %}
+          </dl>
+        </section>
+        {% endfor %}
+      </article>
+      {% endfor %}
+    </section>
+    {% else %}
+    <div class="empty">
+      <p>No connections were found in the archive.</p>
+    </div>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -5,6 +5,7 @@ import os
 import shelve
 import time
 from pathlib import Path
+from typing import Any
 
 from google import genai
 from google.genai import errors, types
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from pdf_tools import (
     DEFAULT_JPEG_QUALITY,
+    PDF_SIZE_LIMIT_BYTES,
     PDFInspector,
     CompressionCandidate,
     choose_pdf_candidates,
@@ -63,6 +65,15 @@ class ArchiveEntry(BaseModel):
     uploaded_filename: str
     analyzed_bytes: int
     compression_method: str | None = None
+
+
+class ChunkManifestEntry(BaseModel):
+    path_name: str
+    size_bytes: int
+    start_page: int | None = None
+    end_page: int | None = None
+    remote_name: str
+    uri: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -149,9 +160,214 @@ def get_cached_file(
         uploaded_file = wait_for_file_processing(client, uploaded_file)
         shelf[abs_path] = {
             "name": uploaded_file.name,
+            "uri": uploaded_file.uri,
             "timestamp": time.time(),
         }
         return uploaded_file
+
+
+def source_cache_signature(source_pdf: Path, inspector: PDFInspector) -> dict[str, Any]:
+    stat = source_pdf.stat()
+    return {
+        "path": str(source_pdf.resolve()),
+        "size_bytes": inspector.file_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "page_count": inspector.page_count,
+    }
+
+
+def chunk_manifest_key(source_pdf: Path) -> str:
+    return f"chunk_manifest::{source_pdf.resolve()}"
+
+
+def get_remote_file_if_available(
+    client: genai.Client,
+    *,
+    remote_name: str,
+    expected_uri: str | None = None,
+) -> File | None:
+    try:
+        remote_file = client.files.get(name=remote_name)
+    except errors.ClientError:
+        return None
+
+    remote_file = wait_for_file_processing(client, remote_file)
+    if expected_uri and remote_file.uri and remote_file.uri != expected_uri:
+        logger.info(
+            "Gemini file URI changed for %s; updating cached manifest.",
+            remote_name,
+        )
+    return remote_file
+
+
+def load_cached_chunk_manifest(
+    client: genai.Client,
+    source_pdf: Path,
+    inspector: PDFInspector,
+    *,
+    shelf_name: str,
+) -> tuple[list[CompressionCandidate], list[File]] | None:
+    manifest_key = chunk_manifest_key(source_pdf)
+    signature = source_cache_signature(source_pdf, inspector)
+
+    with shelve.open(shelf_name, writeback=True) as shelf:
+        manifest = shelf.get(manifest_key)
+        if manifest is None:
+            return None
+
+        if time.time() - manifest.get("timestamp", 0) >= CACHE_TTL_SECONDS:
+            logger.info("Cached chunk manifest expired for %s.", source_pdf.name)
+            shelf.pop(manifest_key, None)
+            return None
+
+        if manifest.get("source") != signature:
+            logger.info("Cached chunk manifest no longer matches %s.", source_pdf.name)
+            shelf.pop(manifest_key, None)
+            return None
+
+        cached_chunks = manifest.get("chunks") or []
+        if not cached_chunks:
+            shelf.pop(manifest_key, None)
+            return None
+
+        submitted_pdfs: list[CompressionCandidate] = []
+        uploaded_files: list[File] = []
+        refreshed_chunks: list[dict[str, Any]] = []
+
+        for chunk in cached_chunks:
+            remote_name = chunk.get("remote_name")
+            if not remote_name:
+                shelf.pop(manifest_key, None)
+                return None
+
+            uploaded_file = get_remote_file_if_available(
+                client,
+                remote_name=remote_name,
+                expected_uri=chunk.get("uri"),
+            )
+            if uploaded_file is None or not uploaded_file.uri:
+                logger.info(
+                    "Cached chunk %s is no longer available on Gemini. Rebuilding manifest.",
+                    remote_name,
+                )
+                shelf.pop(manifest_key, None)
+                return None
+
+            submitted_pdfs.append(
+                CompressionCandidate(
+                    method="chunk",
+                    path=source_pdf.with_name(chunk["path_name"]),
+                    size_bytes=chunk["size_bytes"],
+                    start_page=chunk.get("start_page"),
+                    end_page=chunk.get("end_page"),
+                )
+            )
+            uploaded_files.append(uploaded_file)
+            refreshed_chunks.append(
+                {
+                    **chunk,
+                    "uri": uploaded_file.uri,
+                    "remote_name": uploaded_file.name,
+                }
+            )
+
+        manifest["timestamp"] = time.time()
+        manifest["chunks"] = refreshed_chunks
+        shelf[manifest_key] = manifest
+        logger.info("Reusing cached chunk manifest for %s.", source_pdf.name)
+        return submitted_pdfs, uploaded_files
+
+
+def store_chunk_manifest(
+    source_pdf: Path,
+    inspector: PDFInspector,
+    submitted_pdfs: list[CompressionCandidate],
+    uploaded_files: list[File],
+    *,
+    shelf_name: str,
+) -> None:
+    manifest_key = chunk_manifest_key(source_pdf)
+    chunks = [
+        ChunkManifestEntry(
+            path_name=submitted_pdf.path.name,
+            size_bytes=submitted_pdf.size_bytes,
+            start_page=submitted_pdf.start_page,
+            end_page=submitted_pdf.end_page,
+            remote_name=uploaded_file.name or "",
+            uri=uploaded_file.uri,
+        ).model_dump()
+        for submitted_pdf, uploaded_file in zip(submitted_pdfs, uploaded_files, strict=True)
+    ]
+    with shelve.open(shelf_name, writeback=True) as shelf:
+        shelf[manifest_key] = {
+            "timestamp": time.time(),
+            "source": source_cache_signature(source_pdf, inspector),
+            "chunks": chunks,
+        }
+
+
+def delete_local_chunk_files(source_pdf: Path, submitted_pdfs: list[CompressionCandidate]) -> None:
+    for submitted_pdf in submitted_pdfs:
+        if submitted_pdf.method != "chunk":
+            continue
+        if submitted_pdf.path.resolve() == source_pdf.resolve():
+            continue
+        if submitted_pdf.path.exists():
+            submitted_pdf.path.unlink()
+            logger.info("Deleted local chunk file %s", submitted_pdf.path)
+
+
+def prepare_uploaded_pdfs(
+    client: genai.Client,
+    source_pdf: Path,
+    inspector: PDFInspector,
+    *,
+    oversize_strategy: str,
+    jpeg_quality: int,
+    cache_path: str,
+) -> tuple[list[CompressionCandidate], list[File]]:
+    if oversize_strategy in {"chunk", "auto"} and inspector.file_size > PDF_SIZE_LIMIT_BYTES:
+        cached = load_cached_chunk_manifest(
+            client,
+            source_pdf,
+            inspector,
+            shelf_name=cache_path,
+        )
+        if cached is not None:
+            return cached
+
+    submitted_pdfs = choose_pdf_candidates(
+        source_pdf,
+        inspector,
+        oversize_strategy=oversize_strategy,
+        jpeg_quality=jpeg_quality,
+    )
+    if not submitted_pdfs:
+        return [], []
+
+    uploaded_files: list[File] = []
+    for submitted_pdf in submitted_pdfs:
+        page_label = (
+            f"pages {submitted_pdf.start_page}-{submitted_pdf.end_page}"
+            if submitted_pdf.start_page is not None and submitted_pdf.end_page is not None
+            else submitted_pdf.path.name
+        )
+        logger.info("Uploading %s (%s)", submitted_pdf.path.name, page_label)
+        uploaded_files.append(
+            get_cached_file(client, submitted_pdf.path, shelf_name=cache_path)
+        )
+
+    if submitted_pdfs and all(candidate.method == "chunk" for candidate in submitted_pdfs):
+        store_chunk_manifest(
+            source_pdf,
+            inspector,
+            submitted_pdfs,
+            uploaded_files,
+            shelf_name=cache_path,
+        )
+        delete_local_chunk_files(source_pdf, submitted_pdfs)
+
+    return submitted_pdfs, uploaded_files
 
 
 def wait_for_file_processing(client: genai.Client, uploaded_file: File) -> File:
@@ -252,9 +468,10 @@ def process_pdf(
     source_pdf: Path,
     *,
     submitted_pdfs: list[CompressionCandidate],
+    uploaded_files: list[File],
     inspector: PDFInspector,
     model: str,
-    cache_path: str,
+    started_at: float,
     cost_csv: Path,
     output_jsonl: Path,
 ) -> int:
@@ -264,21 +481,11 @@ def process_pdf(
             "GEMINI_API_KEY is not set. Export it before analyzing PDFs that are within the size limit."
         )
 
-    started = time.time()
     analyzed_names: list[str] = []
     total_analyzed_bytes = 0
     uploaded_names: list[str] = []
-    uploaded_files: list[File] = []
 
-    for submitted_pdf in submitted_pdfs:
-        page_label = (
-            f"pages {submitted_pdf.start_page}-{submitted_pdf.end_page}"
-            if submitted_pdf.start_page is not None and submitted_pdf.end_page is not None
-            else submitted_pdf.path.name
-        )
-        logger.info("Uploading %s (%s)", submitted_pdf.path.name, page_label)
-        uploaded_file = get_cached_file(client, submitted_pdf.path, shelf_name=cache_path)
-        uploaded_files.append(uploaded_file)
+    for submitted_pdf, uploaded_file in zip(submitted_pdfs, uploaded_files, strict=True):
         analyzed_names.append(submitted_pdf.path.name)
         total_analyzed_bytes += submitted_pdf.size_bytes
         uploaded_names.append(uploaded_file.name or submitted_pdf.path.name)
@@ -288,7 +495,7 @@ def process_pdf(
 
     prompt = build_analysis_prompt(source_pdf, submitted_pdfs)
     analysis, response = analyze_pdf(client, uploaded_files, model=model, prompt=prompt)
-    elapsed = time.time() - started
+    elapsed = time.time() - started_at
 
     if len(submitted_pdfs) == 1:
         analyzed_filename = analyzed_names[0]
@@ -338,26 +545,30 @@ def main() -> int:
     for pdf in args.pdfs:
         source_pdf = ensure_pdf_exists(Path(pdf))
         inspector = PDFInspector(source_pdf)
-        submission_pdfs = choose_pdf_candidates(
+        if client is None:
+            api_key = require_api_key()
+            client = build_client(api_key)
+        started_at = time.time()
+        submission_pdfs, uploaded_files = prepare_uploaded_pdfs(
+            client,
             source_pdf,
             inspector,
             oversize_strategy=args.oversize_strategy,
             jpeg_quality=args.jpeg_quality,
+            cache_path=args.cache,
         )
         if not submission_pdfs:
             continue
-        if client is None:
-            api_key = require_api_key()
-            client = build_client(api_key)
         exit_code = max(
             exit_code,
             process_pdf(
                 client,
                 source_pdf,
                 submitted_pdfs=submission_pdfs,
+                uploaded_files=uploaded_files,
                 inspector=inspector,
                 model=args.model,
-                cache_path=args.cache,
+                started_at=started_at,
                 cost_csv=cost_csv,
                 output_jsonl=output_jsonl,
             ),
