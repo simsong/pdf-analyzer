@@ -1,0 +1,7 @@
+.envrc
+*.jsonl
+*.json
+*.csv
+__pycache__
+*.shelf
+*.jsons
