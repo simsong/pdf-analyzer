@@ -170,7 +170,3 @@ The XLSX report contains tabular exports for:
 ## Failure Handling
 
 Failures are first-class stored state. The database records preparation failures, upload failures, analysis failures, missing files, and explicit skipped states. The report separates genuine failures from merely unanalyzed or intentionally skipped PDFs.
-
-## Legacy Code
-
-The repository still contains `src/analyze_pdfs/`, which reflects an older single-document and MIT/Louisiana-specific workflow. That code is retained only as reference and comparison material. The supported packaged system described here is `src/pdf_analyzer/`.

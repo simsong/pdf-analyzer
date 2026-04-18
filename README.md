@@ -54,8 +54,6 @@ Intermediate prepared PDFs are written to a temporary directory for the duration
   Supported archive-analysis package.
 - `doc/theory-of-operation.md`
   Current architecture, data flow, and report pipeline for `pdf_analyzer`.
-- `src/analyze_pdfs/`
-  Legacy experimental tools retained in-tree for reference. They are not part of the supported packaged workflow.
 
 ## Notes
 

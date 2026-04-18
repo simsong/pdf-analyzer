@@ -139,6 +139,14 @@ def _key_person_for_row(row: dict[str, Any]) -> str:
     return "None"
 
 
+def _pdf_page_href(report_href: str | None, page_number: int | None) -> str | None:
+    if not report_href:
+        return None
+    if not isinstance(page_number, int) or page_number < 1:
+        return report_href
+    return f"{report_href}#page={page_number}"
+
+
 def _format_time_period(mentions: list[dict[str, Any]]) -> str:
     if not mentions:
         return "Undated"
@@ -171,6 +179,7 @@ def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, A
                     "brief_summary": row["brief_summary"],
                     "source_filename": row["source_filename"],
                     "page_number": row["page_number"],
+                    "page_href": _pdf_page_href(row.get("report_href"), row["page_number"]),
                 }
             )
 
@@ -269,6 +278,10 @@ def generate_reports(
                 "key_person": "",
                 "anchor": "",
                 "report_href": linked_files.get(row["document_sha256"]),
+                "page_href": _pdf_page_href(
+                    linked_files.get(row["document_sha256"]),
+                    row["page_number"],
+                ),
             }
         )
     evidence_rows.sort(key=_evidence_sort_key)
