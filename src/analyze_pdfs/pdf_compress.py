@@ -2,7 +2,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from pdf_tools import (
+from .pdf_tools import (
     DEFAULT_JPEG_QUALITY,
     PDFInspector,
     choose_pdf_candidates,

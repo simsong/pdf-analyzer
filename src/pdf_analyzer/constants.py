@@ -1,0 +1,27 @@
+from pathlib import Path
+
+
+DEFAULT_MODEL = "gemini-3-flash-preview"
+DEFAULT_WORKERS = 4
+DEFAULT_OVERSIZE_STRATEGY = "chunk"
+DEFAULT_DATABASE_NAME = "pdf_analyzer.sqlite3"
+DEFAULT_REPORT_HTML = "report.html"
+DEFAULT_REPORT_XLSX = "report.xlsx"
+DEFAULT_REPORT_PDFS_DIRNAME = "pdfs"
+DEFAULT_WORK_DIRNAME = ".work"
+DEFAULT_WORK_PREPARED_DIRNAME = "prepared"
+DEFAULT_SCHEMA_VERSION = "v1"
+DEFAULT_PROMPT_VERSION = "v1"
+DEFAULT_SYNTHESIS_PROMPT_VERSION = "v1"
+GEMINI_FILE_TTL_HOURS = 47
+SQLITE_TIMEOUT_SECONDS = 60.0
+SQLITE_JOURNAL_MODE = "WAL"
+SQLITE_SYNCHRONOUS = "NORMAL"
+
+DEFAULT_CONFIG_FILENAMES = (
+    Path("pdf-analyzer.yaml"),
+    Path("pdf-analyzer.yml"),
+    Path("project.yaml"),
+    Path("project.yml"),
+)
+

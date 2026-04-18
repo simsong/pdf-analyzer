@@ -1,0 +1,4 @@
+name: Example Archive
+pdf_directory: ./pdfs
+output_directory: ./example-output
+question: What does this archive say about bridge safety?

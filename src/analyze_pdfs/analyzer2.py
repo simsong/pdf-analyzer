@@ -11,8 +11,7 @@ from google import genai
 from google.genai import errors, types
 from google.genai.types import File, GenerateContentResponseUsageMetadata
 from pydantic import BaseModel, Field
-
-from pdf_tools import (
+from .pdf_tools import (
     DEFAULT_JPEG_QUALITY,
     PDF_SIZE_LIMIT_BYTES,
     PDFInspector,
@@ -21,6 +20,7 @@ from pdf_tools import (
     ensure_pdf_exists,
     human_size,
 )
+from .pricing import estimate_usage_cost, get_model_pricing
 
 
 PROMPT = (
@@ -65,6 +65,7 @@ class ArchiveEntry(BaseModel):
     uploaded_filename: str
     analyzed_bytes: int
     compression_method: str | None = None
+    cost: dict[str, Any] | None = None
 
 
 class ChunkManifestEntry(BaseModel):
@@ -120,14 +121,21 @@ def parse_args() -> argparse.Namespace:
 def require_api_key() -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise SystemExit(
-            "GEMINI_API_KEY is not set. Export it before running analyzer2.py."
-        )
+        raise SystemExit("GEMINI_API_KEY is not set. Export it before running analyze-pdfs.")
     return api_key
 
 
 def build_client(api_key: str) -> genai.Client:
     return genai.Client(api_key=api_key)
+
+
+def get_pricing_snapshot(model_name: str) -> dict[str, Any]:
+    pricing = get_model_pricing(model_name)
+    return {
+        "model_name": pricing.model_name,
+        "input_usd_per_million_tokens": pricing.input_usd_per_million_tokens,
+        "output_usd_per_million_tokens": pricing.output_usd_per_million_tokens,
+    }
 
 
 def list_files_on_server(client: genai.Client) -> None:
@@ -436,6 +444,13 @@ def print_result(entry: ArchiveEntry) -> None:
         print(f"Prompt Tokens: {entry.usage.prompt_token_count}")
         print(f"Candidates Tokens: {entry.usage.candidates_token_count}")
         print(f"Total Tokens: {entry.usage.total_token_count}")
+    if entry.cost:
+        print(
+            "Estimated Cost: "
+            f"${entry.cost['total_cost_usd']:.4f} "
+            f"(input=${entry.cost['input_cost_usd']:.4f}, "
+            f"output=${entry.cost['output_cost_usd']:.4f})"
+        )
     print(f"Total Time: {entry.processing_time:.2f}")
 
 
@@ -472,6 +487,7 @@ def process_pdf(
     inspector: PDFInspector,
     model: str,
     started_at: float,
+    pricing_snapshot: dict[str, Any],
     cost_csv: Path,
     output_jsonl: Path,
 ) -> int:
@@ -496,6 +512,22 @@ def process_pdf(
     prompt = build_analysis_prompt(source_pdf, submitted_pdfs)
     analysis, response = analyze_pdf(client, uploaded_files, model=model, prompt=prompt)
     elapsed = time.time() - started_at
+    usage = response.usage_metadata
+    cost = None
+    if usage is not None:
+        cost_estimate = estimate_usage_cost(
+            pricing_snapshot["model_name"],
+            prompt_tokens=usage.prompt_token_count or 0,
+            candidate_tokens=usage.candidates_token_count or 0,
+        )
+        cost = {
+            "pricing_model_name": pricing_snapshot["model_name"],
+            "input_usd_per_million_tokens": pricing_snapshot["input_usd_per_million_tokens"],
+            "output_usd_per_million_tokens": pricing_snapshot["output_usd_per_million_tokens"],
+            "input_cost_usd": cost_estimate.input_cost_usd,
+            "output_cost_usd": cost_estimate.output_cost_usd,
+            "total_cost_usd": cost_estimate.total_cost_usd,
+        }
 
     if len(submitted_pdfs) == 1:
         analyzed_filename = analyzed_names[0]
@@ -517,11 +549,12 @@ def process_pdf(
         timestamp=time.time(),
         processing_time=elapsed,
         data=analysis,
-        usage=response.usage_metadata,
+        usage=usage,
         model_version=response.model_version or model,
         uploaded_filename=uploaded_filename,
         analyzed_bytes=analyzed_bytes,
         compression_method=compression_method,
+        cost=cost,
     )
 
     print_result(entry)
@@ -538,6 +571,8 @@ def main() -> int:
         api_key = require_api_key()
         client = build_client(api_key)
         list_files_on_server(client)
+
+    pricing_snapshot = get_pricing_snapshot(args.model)
 
     cost_csv = Path(args.cost_csv)
     output_jsonl = Path(args.output_jsonl)
@@ -569,6 +604,7 @@ def main() -> int:
                 inspector=inspector,
                 model=args.model,
                 started_at=started_at,
+                pricing_snapshot=pricing_snapshot,
                 cost_csv=cost_csv,
                 output_jsonl=output_jsonl,
             ),

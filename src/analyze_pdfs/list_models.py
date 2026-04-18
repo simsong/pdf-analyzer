@@ -1,9 +1,10 @@
 import os
+import sys
 
 from google import genai
 
 
-def list_models_live(api_key):
+def list_models_live(api_key: str) -> None:
     client = genai.Client(api_key=api_key)
 
     print(f"{'MODEL ID':<40} | {'INPUT LIMIT':<12} | {'OUTPUT LIMIT':<12} | {'CAPABILITIES'}")
@@ -47,12 +48,18 @@ def list_models_live(api_key):
         print("\nDEBUG: First model object attributes:")
         try:
             print(dir(all_models[0]))
-        except:
+        except Exception:
             pass
 
-if __name__ == "__main__":
+
+def main() -> int:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("Error: GEMINI_API_KEY environment variable not found.")
-        sys.exit(0)
+        print("Error: GEMINI_API_KEY environment variable not found.", file=sys.stderr)
+        return 1
     list_models_live(api_key)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

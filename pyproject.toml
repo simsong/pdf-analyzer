@@ -11,21 +11,48 @@ dependencies = [
     "google-genai>=1.73.0",
     "google-generativeai>=0.8.3",
     "jinja2>=3.1.6",
+    "openpyxl>=3.1.5",
     "pydantic>=2.13.0",
     "pypdf>=5.9.0",
+    "pyyaml>=6.0.2",
 ]
 
 [project.scripts]
-analyze-mit = "mit_analyzer:main"
-compress-pdf = "pdf_compress:main"
-report = "report:main"
+analyze-pdfs = "analyze_pdfs.analyzer2:main"
+analyze-mit = "analyze_pdfs.mit_analyzer:main"
+compress-pdf = "analyze_pdfs.pdf_compress:main"
+analyze-pdfs-report = "analyze_pdfs.report:main"
+list-gemini-models = "analyze_pdfs.list_models:main"
+pdf-analyzer = "pdf_analyzer.main:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
+
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["src/analyze_pdfs", "src/pdf_analyzer"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/README.md",
+    "/doc",
+    "/pyproject.toml",
+    "/src/analyze_pdfs",
+    "/src/pdf_analyzer",
+    "/uv.lock",
+]
 
 [tool.uv]
 managed = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "gemini_live: opt-in Gemini-backed live integration tests",
+]

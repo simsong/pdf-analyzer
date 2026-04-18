@@ -1,17 +1,25 @@
 import argparse
+import csv
 import json
 import re
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, select_autoescape
+
+from .pricing import (
+    DEFAULT_GCS_STANDARD_USD_PER_GB_MONTH,
+    get_model_pricing,
+)
 
 
 DEFAULT_INPUT_JSONL = "output.jsonl"
 DEFAULT_TEMPLATE = "report_template.html"
+DEFAULT_COST_CSV = "cost.csv"
 UNKNOWN_YEAR = 9999
 
 
@@ -63,6 +71,21 @@ class FactoredConnection:
     facts: list[FactoredWhat]
 
 
+@dataclass
+class CostSummary:
+    requests: int
+    prompt_tokens: int
+    candidate_tokens: int
+    total_tokens: int
+    model_version: str
+    input_cost_usd: float
+    output_cost_usd: float
+    total_cost_usd: float
+    unique_source_files: int
+    unique_source_bytes: int
+    gcs_storage_cost_usd_month: float
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Render an HTML report from analyzer2 JSONL output."
@@ -87,6 +110,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include debug-only fields in the rendered report.",
     )
+    parser.add_argument(
+        "--cost",
+        action="store_true",
+        help="Print a text cost summary from the cost log instead of rendering HTML.",
+    )
+    parser.add_argument(
+        "--cost-file",
+        default=DEFAULT_COST_CSV,
+        help="Path to the analyzer cost CSV. Defaults to cost.csv.",
+    )
     return parser.parse_args()
 
 
@@ -97,6 +130,16 @@ def ensure_file_exists(path: Path, *, label: str) -> Path:
     if not resolved.is_file():
         raise SystemExit(f"{label} is not a file: {resolved}")
     return resolved
+
+
+def human_size_decimal(num_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(num_bytes)
+    for unit in units:
+        if size < 1000 or unit == units[-1]:
+            return f"{size:.1f} {unit}"
+        size /= 1000
+    return f"{num_bytes} B"
 
 
 def normalize_text(value: str) -> str:
@@ -223,6 +266,156 @@ def format_archived_at(timestamp: Any) -> str:
     if not isinstance(timestamp, (int, float)):
         return ""
     return datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def parse_cost_rows(cost_csv_path: Path) -> list[tuple[int, int, int]]:
+    rows: list[tuple[int, int, int]] = []
+    with cost_csv_path.open(newline="") as handle:
+        reader = csv.reader(handle)
+        for raw_row in reader:
+            row = [cell.strip() for cell in raw_row if cell.strip()]
+            if not row:
+                continue
+
+            lowered = [cell.lower() for cell in row]
+            if lowered[:3] == ["prompt_tokens", "candidate_tokens", "total_tokens"]:
+                continue
+
+            if len(row) < 3:
+                continue
+
+            try:
+                prompt_tokens = int(row[0])
+                candidate_tokens = int(row[1])
+                total_tokens = int(row[2])
+            except ValueError:
+                continue
+
+            rows.append((prompt_tokens, candidate_tokens, total_tokens))
+    return rows
+
+
+def load_archive_entries(jsonl_path: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    with jsonl_path.open() as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"Could not parse JSON on line {line_number} of {jsonl_path}: {exc}"
+                ) from exc
+    return entries
+
+
+def infer_model_version(entries: list[dict[str, Any]]) -> str:
+    model_versions = {
+        normalize_text(entry.get("model_version") or "")
+        for entry in entries
+        if normalize_text(entry.get("model_version") or "")
+    }
+    if not model_versions:
+        return "gemini-3-flash-preview"
+    if len(model_versions) == 1:
+        return next(iter(model_versions))
+    raise SystemExit(
+        "Cost report requires a single model_version in the JSONL archive or an explicit pricing map update."
+    )
+
+
+def estimate_unique_source_storage(entries: list[dict[str, Any]]) -> tuple[int, int]:
+    by_filename: dict[str, int] = {}
+    for entry in entries:
+        filename = normalize_text(entry.get("filename") or "")
+        analyzed_bytes = entry.get("analyzed_bytes")
+        if not filename or not isinstance(analyzed_bytes, int):
+            continue
+        by_filename[filename] = max(by_filename.get(filename, 0), analyzed_bytes)
+    return len(by_filename), sum(by_filename.values())
+
+
+def build_cost_summary(cost_csv_path: Path, jsonl_path: Path) -> CostSummary:
+    cost_rows = parse_cost_rows(cost_csv_path)
+    if not cost_rows:
+        raise SystemExit(f"No usable token rows found in {cost_csv_path}")
+
+    entries = load_archive_entries(jsonl_path)
+    model_version = infer_model_version(entries)
+    try:
+        pricing = get_model_pricing(model_version)
+    except ValueError:
+        raise SystemExit(
+            f"No built-in pricing is configured for model_version={model_version!r}"
+        )
+
+    prompt_tokens = sum(row[0] for row in cost_rows)
+    candidate_tokens = sum(row[1] for row in cost_rows)
+    total_tokens = sum(row[2] for row in cost_rows)
+    input_cost_usd = (
+        prompt_tokens / 1_000_000
+    ) * pricing.input_usd_per_million_tokens
+    output_cost_usd = (
+        candidate_tokens / 1_000_000
+    ) * pricing.output_usd_per_million_tokens
+    total_cost_usd = input_cost_usd + output_cost_usd
+
+    unique_source_files, unique_source_bytes = estimate_unique_source_storage(entries)
+    gcs_storage_cost_usd_month = (
+        unique_source_bytes / 1_000_000_000
+    ) * DEFAULT_GCS_STANDARD_USD_PER_GB_MONTH
+
+    return CostSummary(
+        requests=len(cost_rows),
+        prompt_tokens=prompt_tokens,
+        candidate_tokens=candidate_tokens,
+        total_tokens=total_tokens,
+        model_version=model_version,
+        input_cost_usd=input_cost_usd,
+        output_cost_usd=output_cost_usd,
+        total_cost_usd=total_cost_usd,
+        unique_source_files=unique_source_files,
+        unique_source_bytes=unique_source_bytes,
+        gcs_storage_cost_usd_month=gcs_storage_cost_usd_month,
+    )
+
+
+def format_usd(value: float) -> str:
+    return f"${value:,.4f}"
+
+
+def print_cost_report(summary: CostSummary) -> None:
+    rows = [
+        ("Model", summary.model_version),
+        ("Requests", f"{summary.requests:,}"),
+        ("Prompt Tokens", f"{summary.prompt_tokens:,}"),
+        ("Output Tokens", f"{summary.candidate_tokens:,}"),
+        ("Total Tokens", f"{summary.total_tokens:,}"),
+        ("Input Cost", format_usd(summary.input_cost_usd)),
+        ("Output Cost", format_usd(summary.output_cost_usd)),
+        ("Total Gemini Cost", format_usd(summary.total_cost_usd)),
+        ("Unique Source Files", f"{summary.unique_source_files:,}"),
+        ("Unique Source Bytes", f"{summary.unique_source_bytes:,} ({human_size_decimal(summary.unique_source_bytes)})"),
+        ("Est. GCS Monthly Storage", format_usd(summary.gcs_storage_cost_usd_month)),
+    ]
+    label_width = max(len(label) for label, _ in rows)
+    value_width = max(len(value) for _, value in rows)
+    border = f"+-{'-' * label_width}-+-{'-' * value_width}-+"
+
+    print(border)
+    print(f"| {'Metric'.ljust(label_width)} | {'Value'.ljust(value_width)} |")
+    print(border)
+    for label, value in rows:
+        print(f"| {label.ljust(label_width)} | {value.ljust(value_width)} |")
+    print(border)
+    print()
+    print(
+        "Assumptions: Gemini cost uses paid-tier token pricing for the detected model; "
+        "GCS storage uses Google Cloud Storage Standard in a US single-region bucket at "
+        "$0.020 per GB-month."
+    )
 
 
 def load_occurrences(jsonl_path: Path) -> list[ConnectionOccurrence]:
@@ -409,9 +602,17 @@ def factor_connections(occurrences: list[ConnectionOccurrence]) -> list[Factored
     return factored
 
 
-def build_environment(template_path: Path) -> Environment:
+def load_template_source(template_name: str) -> str:
+    candidate = Path(template_name)
+    if template_name == DEFAULT_TEMPLATE and not candidate.exists():
+        return files("analyze_pdfs").joinpath(DEFAULT_TEMPLATE).read_text(encoding="utf-8")
+
+    template_path = ensure_file_exists(candidate, label="Template")
+    return template_path.read_text(encoding="utf-8")
+
+
+def build_environment() -> Environment:
     return Environment(
-        loader=FileSystemLoader(str(template_path.parent)),
         autoescape=select_autoescape(["html", "xml"]),
         trim_blocks=True,
         lstrip_blocks=True,
@@ -419,14 +620,14 @@ def build_environment(template_path: Path) -> Environment:
 
 
 def render_report(
-    template_path: Path,
+    template_source: str,
     connections: list[FactoredConnection],
     source_jsonl: Path,
     *,
     debug: bool,
 ) -> str:
-    env = build_environment(template_path)
-    template = env.get_template(template_path.name)
+    env = build_environment()
+    template = env.from_string(template_source)
     generated_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     return template.render(
         title="MIT Louisiana Connections Report",
@@ -452,17 +653,23 @@ def write_output(rendered_html: str, output_path: Path | None) -> None:
         return
 
     resolved = output_path.expanduser().resolve()
-    resolved.write_text(rendered_html)
+    resolved.write_text(rendered_html, encoding="utf-8")
 
 
 def main() -> int:
     args = parse_args()
     jsonl_path = ensure_file_exists(Path(args.jsonl), label="JSONL archive")
-    template_path = ensure_file_exists(Path(args.template), label="Template")
+    if args.cost:
+        cost_csv_path = ensure_file_exists(Path(args.cost_file), label="Cost CSV")
+        summary = build_cost_summary(cost_csv_path, jsonl_path)
+        print_cost_report(summary)
+        return 0
+
+    template_source = load_template_source(args.template)
     occurrences = load_occurrences(jsonl_path)
     connections = factor_connections(occurrences)
     rendered_html = render_report(
-        template_path,
+        template_source,
         connections,
         jsonl_path,
         debug=args.report_debug,
