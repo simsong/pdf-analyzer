@@ -50,6 +50,10 @@ def configure_logging(verbose: bool) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
     )
+    # Suppress known third-party noise that obscures archive-analysis output.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
+    logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
+    logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 
 def discover_pdf_paths(pdf_directory: Path) -> list[Path]:
@@ -445,7 +449,15 @@ def main() -> int:
             pending_documents=pending_documents,
             model_name=model_name,
         )
+        if pending_documents:
+            LOGGER.info(
+                "Skipped %s/%s queued PDFs because --no-gemini was enabled; %s remain unprocessed by Gemini for this run.",
+                skipped_documents,
+                len(pending_documents),
+                len(pending_documents) - skipped_documents,
+            )
     elif pending_documents:
+        total_pending = len(pending_documents)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(
@@ -469,6 +481,16 @@ def main() -> int:
                     failed_documents += 1
                 else:
                     skipped_documents += 1
+                remaining_documents = total_pending - analyzed_documents
+                LOGGER.info(
+                    "Processed %s/%s queued PDFs; %s remaining (succeeded=%s, failed=%s, skipped=%s).",
+                    analyzed_documents,
+                    total_pending,
+                    remaining_documents,
+                    succeeded_documents,
+                    failed_documents,
+                    skipped_documents,
+                )
 
     if not args.no_gemini:
         responsive_documents, successful_documents = build_synthesis_documents(db, query_id)
