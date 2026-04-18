@@ -1028,8 +1028,8 @@ class Database:
                 FROM document_analyses da
                 JOIN documents d ON d.sha256 = da.document_sha256
                 WHERE da.query_id = ?
-                  AND da.status != 'succeeded'
-                ORDER BY da.source_filename, da.document_sha256
+                  AND da.status = 'failed'
+                ORDER BY da.completed_at, da.source_filename, da.document_sha256
                 """
             , (query_id,)).fetchall()
         )

@@ -89,7 +89,7 @@ def test_pdf_analyzer_live_single_pdf(tmp_path: Path, monkeypatch: pytest.Monkey
         sys,
         "argv",
         [
-            "pdf-analyzer",
+            "analyze",
             str(config_path),
             "--limit",
             "1",
@@ -100,13 +100,15 @@ def test_pdf_analyzer_live_single_pdf(tmp_path: Path, monkeypatch: pytest.Monkey
     assert exit_code == 0
 
     output_dir = tmp_path / "live-output"
-    database_path = output_dir / "data" / "pdf_analyzer.sqlite3"
+    database_path = output_dir / "pdf_analyzer.sqlite3"
     report_html = output_dir / "report.html"
     report_xlsx = output_dir / "report.xlsx"
+    copied_config = output_dir / "project.yaml"
 
     assert database_path.exists()
     assert report_html.exists()
     assert report_xlsx.exists()
+    assert copied_config.exists()
 
     conn = sqlite3.connect(database_path)
     conn.row_factory = sqlite3.Row

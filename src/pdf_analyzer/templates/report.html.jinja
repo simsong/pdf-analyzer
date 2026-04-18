@@ -6,120 +6,208 @@
   <style>
     :root {
       color-scheme: light;
-      --paper: #fcfcfd;
-      --bg: #e5e7eb;
-      --ink: #1f2937;
-      --muted: #6b7280;
-      --line: #c7ccd4;
+      --paper: #ffffff;
+      --bg: #ffffff;
+      --ink: #000000;
+      --muted: #4b5563;
+      --line: #d1d5db;
       --accent: #0f766e;
       --accent-soft: #d4f2ee;
       --warn: #92400e;
       --warn-soft: #fef3c7;
       --danger: #991b1b;
       --danger-soft: #fee2e2;
-      --panel: rgba(15, 118, 110, 0.08);
-      --panel-white: rgba(255, 255, 255, 0.9);
+      --card: #f8fafc;
     }
 
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      padding: 2rem;
-      background:
-        radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 28rem),
-        linear-gradient(180deg, #f3f4f6 0%, #dfe3e8 100%);
+      padding: 1rem;
+      background: var(--bg);
       color: var(--ink);
       font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
-      line-height: 1.45;
+      line-height: 1.36;
     }
     main {
-      max-width: 84rem;
+      max-width: 80rem;
       margin: 0 auto;
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      overflow: hidden;
-      box-shadow: 0 18px 40px rgba(31, 41, 55, 0.10);
     }
     header {
-      padding: 2.5rem;
+      padding: 1.4rem 1.6rem 1.2rem;
       border-bottom: 1px solid var(--line);
-      background: linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(255, 255, 255, 0));
+      background: #fff;
     }
-    h1, h2, h3 { margin: 0; line-height: 1.2; }
-    h2 { font-size: 1.3rem; margin-bottom: 0.85rem; }
-    .lede { margin-top: 1rem; max-width: 56rem; color: var(--muted); }
-    .meta { color: var(--muted); margin-top: 0.35rem; }
-    section { padding: 1.5rem 2rem 2rem; border-top: 1px solid var(--line); }
+    h1, h2, h3 { margin: 0; line-height: 1.16; }
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.2rem; margin-bottom: 0.7rem; }
+    h3 { font-size: 1.02rem; }
+    p { margin: 0.45rem 0 0; }
+    .lede { max-width: 60rem; color: var(--muted); }
+    .meta { color: var(--muted); margin-top: 0.3rem; }
+    section { padding: 1rem 1.6rem 1.2rem; border-top: 1px solid var(--line); }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-      gap: 0.75rem;
-      margin-top: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+      gap: 0.55rem;
+      margin-top: 0.8rem;
     }
     .card {
-      padding: 0.9rem 1rem;
+      padding: 0.7rem 0.8rem;
       border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--panel-white);
+      background: var(--card);
     }
-    .label { font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-    .value { font-size: 1.2rem; font-weight: 700; margin-top: 0.2rem; }
+    .label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .value {
+      font-size: 1.08rem;
+      font-weight: 700;
+      margin-top: 0.12rem;
+    }
     .synthesis {
       border: 1px solid var(--line);
-      border-radius: 14px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(212,242,238,0.4));
-      padding: 1rem 1.1rem;
+      background: linear-gradient(180deg, rgba(255,255,255,1), rgba(212,242,238,0.55));
+      padding: 0.95rem 1rem;
     }
-    .finding-list, .status-list { margin: 0.75rem 0 0; padding-left: 1.2rem; }
-    table {
+    .finding-list, .status-list {
+      margin: 0.6rem 0 0;
+      padding-left: 1.1rem;
+    }
+    .index-table, .people-table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 1rem;
-      font-size: 0.96rem;
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
     }
     th, td {
       border-bottom: 1px solid var(--line);
-      padding: 0.8rem 0.65rem;
+      padding: 0.45rem 0.45rem;
       text-align: left;
       vertical-align: top;
     }
     th {
       color: var(--muted);
-      font-size: 0.83rem;
+      font-size: 0.78rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
-    .chips { color: var(--muted); font-size: 0.92rem; }
+    .summary-link {
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px dotted var(--accent);
+    }
+    .summary-link:hover { color: var(--accent); }
+    .chips {
+      color: var(--muted);
+      font-size: 0.89rem;
+    }
+    .dense { margin-top: 0.25rem; }
+    .warn, .danger {
+      border: 1px solid var(--line);
+      padding: 0.8rem 0.9rem;
+    }
     .warn {
       background: var(--warn-soft);
-      border: 1px solid #fcd34d;
-      border-radius: 12px;
-      padding: 0.9rem 1rem;
+      border-color: #fcd34d;
     }
     .danger {
       background: var(--danger-soft);
-      border: 1px solid #fca5a5;
-      border-radius: 12px;
-      padding: 0.9rem 1rem;
+      border-color: #fca5a5;
     }
     .empty { color: var(--muted); }
+    .evidence-list {
+      display: grid;
+      gap: 0.8rem;
+      margin-top: 0.8rem;
+    }
+    .evidence-card {
+      border: 1px solid var(--line);
+      padding: 0.9rem 1rem;
+      scroll-margin-top: 1rem;
+    }
+    .eyebrow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 0.55rem;
+    }
+    .pill {
+      display: inline-block;
+      padding: 0.16rem 0.45rem;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .date-pill {
+      border-color: #99f6e4;
+      background: var(--accent-soft);
+      color: #134e4a;
+    }
+    .evidence-text {
+      margin-top: 0.35rem;
+      font-size: 1rem;
+    }
+    .document-summary {
+      margin-top: 0.6rem;
+      padding-top: 0.55rem;
+      border-top: 1px solid var(--line);
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      gap: 0.35rem 0.8rem;
+      margin-top: 0.55rem;
+      font-size: 0.92rem;
+    }
+    .disclosure-cell {
+      width: 2rem;
+      padding-right: 0;
+    }
+    .disclosure {
+      border: none;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .triangle {
+      display: inline-block;
+      width: 1rem;
+      text-align: center;
+      font-size: 0.95rem;
+    }
+    .mention-list {
+      display: grid;
+      gap: 0.35rem;
+      padding: 0.15rem 0 0.15rem 0.2rem;
+    }
+    .mention-line {
+      font-size: 0.92rem;
+    }
     code { font-size: 0.92em; }
     a { color: var(--accent); }
     @media (max-width: 900px) {
-      body { padding: 1rem; }
-      header, section { padding-left: 1.2rem; padding-right: 1.2rem; }
-      table, thead, tbody, th, td, tr { display: block; }
-      thead { display: none; }
-      tr {
+      body { padding: 0.4rem; }
+      header, section { padding-left: 0.9rem; padding-right: 0.9rem; }
+      .index-table, .people-table, thead, tbody, th, td, tr { display: block; }
+      .index-table thead, .people-table thead { display: none; }
+      .index-table tr, .people-table tr {
         border: 1px solid var(--line);
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        overflow: hidden;
-        background: white;
+        margin-bottom: 0.55rem;
       }
-      td { border-bottom: 1px solid var(--line); }
-      td:last-child { border-bottom: none; }
+      .index-table td, .people-table td { border-bottom: 1px solid var(--line); }
+      .index-table td:last-child, .people-table td:last-child { border-bottom: none; }
+      .disclosure-cell { width: auto; padding-right: 0.45rem; }
     }
   </style>
 </head>
@@ -131,22 +219,23 @@
       {% if run_summary %}
       <p class="meta">Last run: {{ run_summary.started_at }}{% if run_summary.completed_at %} to {{ run_summary.completed_at }}{% endif %}</p>
       {% endif %}
-      <p class="lede">This report shows one row per responsive evidence item, grouped from per-document Gemini analyses over the configured PDF archive. Evidence is sorted by the earliest detected year in the extracted dates or summary text.</p>
+      <p class="lede">This report lists responsive evidence chronologically, using the earliest date detected in each response. The copied PDFs directory contains only responsive source documents referenced by this report.</p>
     </header>
 
     <section>
       <h2>Run Summary</h2>
       <div class="grid">
-        <div class="card"><div class="label">Documents</div><div class="value">{{ summary.total_documents }}</div></div>
-        <div class="card"><div class="label">Responsive Documents</div><div class="value">{{ summary.responsive_documents }}</div></div>
-        <div class="card"><div class="label">Evidence Rows</div><div class="value">{{ summary.responsive_evidence_rows }}</div></div>
-        <div class="card"><div class="label">Failures</div><div class="value">{{ summary.failed_documents }}</div></div>
-        <div class="card"><div class="label">Unanalyzed</div><div class="value">{{ summary.unanalyzed_documents }}</div></div>
+        <div class="card"><div class="label">Documents</div><div class="value">{{ "{:,}".format(summary.total_documents) }}</div></div>
+        <div class="card"><div class="label">Pages Scanned</div><div class="value">{{ "{:,}".format(summary.total_pages_scanned) }}</div></div>
+        <div class="card"><div class="label">Responsive PDFs</div><div class="value">{{ "{:,}".format(summary.responsive_documents) }}</div></div>
+        <div class="card"><div class="label">Evidence Rows</div><div class="value">{{ "{:,}".format(summary.responsive_evidence_rows) }}</div></div>
+        <div class="card"><div class="label">Failures</div><div class="value">{{ "{:,}".format(summary.failed_documents) }}</div></div>
+        <div class="card"><div class="label">Unanalyzed</div><div class="value">{{ "{:,}".format(summary.unanalyzed_documents) }}</div></div>
         {% if run_summary %}
         <div class="card"><div class="label">Run Cost</div><div class="value">${{ '%.4f'|format(run_summary.total_cost_usd) }}</div></div>
-        <div class="card"><div class="label">Prompt Tokens</div><div class="value">{{ run_summary.prompt_tokens }}</div></div>
-        <div class="card"><div class="label">Output Tokens</div><div class="value">{{ run_summary.candidate_tokens }}</div></div>
-        <div class="card"><div class="label">Uploads</div><div class="value">{{ run_summary.upload_count }}</div></div>
+        <div class="card"><div class="label">Prompt Tokens</div><div class="value">{{ "{:,}".format(run_summary.prompt_tokens) }}</div></div>
+        <div class="card"><div class="label">Output Tokens</div><div class="value">{{ "{:,}".format(run_summary.candidate_tokens) }}</div></div>
+        <div class="card"><div class="label">Uploads</div><div class="value">{{ "{:,}".format(run_summary.upload_count) }}</div></div>
         {% endif %}
       </div>
     </section>
@@ -163,7 +252,7 @@
           {% endfor %}
         </ul>
         {% endif %}
-        <p class="chips">
+        <p class="chips dense">
           {% if synthesis.people %}<strong>People:</strong> {{ synthesis.people | join("; ") }}{% endif %}
           {% if synthesis.places %} {% if synthesis.people %}|{% endif %} <strong>Places:</strong> {{ synthesis.places | join("; ") }}{% endif %}
           {% if synthesis.dates %} {% if synthesis.people or synthesis.places %}|{% endif %} <strong>Dates:</strong> {{ synthesis.dates | join("; ") }}{% endif %}
@@ -175,43 +264,109 @@
     </section>
 
     <section>
-      <h2>Responsive Evidence</h2>
+      <h2>Responsive Index</h2>
       {% if evidence_rows %}
-      <table>
+      <table class="index-table">
         <thead>
           <tr>
-            <th>File</th>
-            <th>Page</th>
-            <th>Evidence</th>
-            <th>People / Places / Dates</th>
-            <th>Document Summary</th>
-            <th>Score</th>
+            <th>Date</th>
+            <th>Key Person</th>
+            <th>Brief Summary</th>
           </tr>
         </thead>
         <tbody>
           {% for row in evidence_rows %}
           <tr>
-            <td>
+            <td>{{ row.date_label }}</td>
+            <td>{{ row.key_person }}</td>
+            <td><a class="summary-link" href="#{{ row.anchor }}">{{ row.brief_summary }}</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No responsive evidence rows are currently available.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>People</h2>
+      {% if people_index %}
+      <table class="people-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Person</th>
+            <th>Mentions</th>
+            <th>Time Period</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for person in people_index %}
+          <tr>
+            <td class="disclosure-cell">
+              <button class="disclosure" type="button" data-toggle-target="{{ person.toggle_id }}" aria-expanded="false" aria-controls="{{ person.toggle_id }}">
+                <span class="triangle">▸</span>
+              </button>
+            </td>
+            <td>{{ person.person }}</td>
+            <td>{{ "{:,}".format(person.mention_count) }}</td>
+            <td>{{ person.time_period }}</td>
+          </tr>
+          <tr id="{{ person.toggle_id }}" hidden>
+            <td colspan="4">
+              <div class="mention-list">
+                {% for mention in person.mentions %}
+                <div class="mention-line">
+                  <a href="#{{ mention.anchor }}">{{ mention.date_label }}</a> | {{ mention.brief_summary }}
+                  <span class="chips">({{ mention.source_filename }}{% if mention.page_number %}, p. {{ mention.page_number }}{% endif %})</span>
+                </div>
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No named people were extracted from the responsive evidence.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>Responsive Evidence</h2>
+      {% if evidence_rows %}
+      <div class="evidence-list">
+        {% for row in evidence_rows %}
+        <article class="evidence-card" id="{{ row.anchor }}">
+          <div class="eyebrow">
+            <span class="pill date-pill">{{ row.date_label }}</span>
+            <span class="pill">{{ row.key_person }}</span>
+            {% if row.page_number %}<span class="pill">Page {{ row.page_number }}</span>{% endif %}
+            <span class="pill">Score {% if row.relevance_score is not none %}{{ row.relevance_score }}/10{% else %}?{% endif %}</span>
+          </div>
+          <h3>{{ row.brief_summary }}</h3>
+          <p class="evidence-text">{{ row.summary }}</p>
+          <div class="meta-grid">
+            <div>
+              <strong>File:</strong>
               {% if row.report_href %}
               <a href="{{ row.report_href }}">{{ row.source_filename }}</a>
               {% else %}
               {{ row.source_filename }}
               {% endif %}
-              <div class="chips">{{ row.source_path }}</div>
-            </td>
-            <td>{% if row.page_number %}{{ row.page_number }}{% else %}Unknown{% endif %}</td>
-            <td>{{ row.summary }}</td>
-            <td class="chips">
-              {% if row.people %}<strong>People:</strong> {{ row.people | join("; ") }}<br>{% endif %}
-              {% if row.places %}<strong>Places:</strong> {{ row.places | join("; ") }}<br>{% endif %}
-              {% if row.dates %}<strong>Dates:</strong> {{ row.dates | join("; ") }}{% endif %}
-            </td>
-            <td>{{ row.document_summary }}</td>
-            <td>{% if row.relevance_score is not none %}{{ row.relevance_score }}/10{% else %}?{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+            </div>
+            <div><strong>Path:</strong> <span class="chips">{{ row.source_path }}</span></div>
+            {% if row.people %}<div><strong>People:</strong> {{ row.people | join("; ") }}</div>{% endif %}
+            {% if row.places %}<div><strong>Places:</strong> {{ row.places | join("; ") }}</div>{% endif %}
+            {% if row.dates %}<div><strong>Dates:</strong> {{ row.dates | join("; ") }}</div>{% endif %}
+          </div>
+          {% if row.document_summary %}
+          <p class="document-summary"><strong>Document Summary:</strong> {{ row.document_summary }}</p>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
       {% else %}
       <p class="empty">No responsive evidence rows are currently available.</p>
       {% endif %}
@@ -223,7 +378,7 @@
       <div class="warn">
         <ul class="status-list">
           {% for row in unanalyzed_rows %}
-          <li><strong>{{ row.canonical_filename }}</strong> — {{ row.status or "not yet analyzed" }}{% if row.failure_type %} ({{ row.failure_type }}){% endif %}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
+          <li><strong>{{ row.canonical_filename }}</strong> | {{ row.status or "not yet analyzed" }}{% if row.failure_type %} ({{ row.failure_type }}){% endif %}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
           {% endfor %}
         </ul>
       </div>
@@ -238,7 +393,7 @@
       <div class="danger">
         <ul class="status-list">
           {% for row in failure_rows %}
-          <li><strong>{{ row.source_filename }}</strong> — {{ row.failure_type or row.status }}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
+          <li><strong>{{ row.source_filename }}</strong> | {{ row.failure_type or row.status }}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
           {% endfor %}
         </ul>
       </div>
@@ -247,5 +402,22 @@
       {% endif %}
     </section>
   </main>
+  <script>
+    document.querySelectorAll("[data-toggle-target]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = document.getElementById(button.dataset.toggleTarget);
+        if (!target) {
+          return;
+        }
+        const expanded = button.getAttribute("aria-expanded") === "true";
+        button.setAttribute("aria-expanded", expanded ? "false" : "true");
+        const triangle = button.querySelector(".triangle");
+        if (triangle) {
+          triangle.textContent = expanded ? "▸" : "▾";
+        }
+        target.hidden = expanded;
+      });
+    });
+  </script>
 </body>
 </html>

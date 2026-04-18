@@ -2,7 +2,9 @@ import argparse
 import concurrent.futures
 import json
 import logging
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -101,6 +103,7 @@ def scan_archive(db: Database, config: ProjectConfig) -> list[dict[str, Any]]:
 def process_document_task(
     *,
     database_path: Path,
+    prepared_dir: Path,
     query_id: int,
     run_id: int,
     document_sha256: str,
@@ -136,12 +139,11 @@ def process_document_task(
         db.close()
         return {"status": "failed", "failure_type": "missing_pdf"}
 
-    work_dir = database_path.parent.parent / ".work" / "prepared"
     try:
         inspector, candidates = prepare_candidates_for_upload(
             source_path,
             document_sha256=document_sha256,
-            work_dir=work_dir,
+            work_dir=prepared_dir,
             oversize_strategy=oversize_strategy,
         )
     except Exception as exc:
@@ -355,6 +357,23 @@ def build_synthesis_documents(db: Database, query_id: int) -> tuple[list[dict[st
     return responsive_documents, len(successful)
 
 
+def should_refresh_synthesis(
+    *,
+    args: argparse.Namespace,
+    pending_documents: list[dict[str, Any]],
+    existing_synthesis: Any,
+) -> bool:
+    if args.no_gemini:
+        return False
+    if args.force:
+        return True
+    if pending_documents:
+        return True
+    if existing_synthesis is None:
+        return True
+    return existing_synthesis["status"] != "succeeded"
+
+
 def maybe_skip_documents_for_no_gemini(
     *,
     db: Database,
@@ -395,7 +414,11 @@ def main() -> int:
     oversize_strategy = args.oversize_strategy or config.oversize_strategy or DEFAULT_OVERSIZE_STRATEGY
 
     output_dir = config.resolved_output_directory
-    database_path = output_dir / "data" / DEFAULT_DATABASE_NAME
+    database_path = output_dir / DEFAULT_DATABASE_NAME
+    if config.config_path is not None:
+        copied_config_path = output_dir / config.config_path.name
+        if copied_config_path.resolve() != config.config_path.resolve():
+            shutil.copy2(config.config_path, copied_config_path)
     db = Database(database_path)
     db.init_schema()
     db.set_metadata("project_name", config.name)
@@ -419,225 +442,241 @@ def main() -> int:
         started_at=utc_now_iso(),
     )
 
-    discovered_documents = scan_archive(db, config)
-    LOGGER.info(
-        "Scanned %s PDFs under %s",
-        len(discovered_documents),
-        config.resolved_pdf_directory,
-    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="pdf-analyzer-") as temporary_dir:
+            prepared_dir = Path(temporary_dir) / "prepared"
 
-    pending_documents = []
-    for document in discovered_documents:
-        if not args.force and db.successful_analysis_exists(query_id, document["sha256"]):
-            continue
-        pending_documents.append(document)
-    if args.limit is not None:
-        pending_documents = pending_documents[: args.limit]
-
-    LOGGER.info("Queued %s PDFs for analysis", len(pending_documents))
-
-    analyzed_documents = 0
-    succeeded_documents = 0
-    failed_documents = 0
-    skipped_documents = 0
-
-    if args.no_gemini:
-        skipped_documents = maybe_skip_documents_for_no_gemini(
-            db=db,
-            query_id=query_id,
-            run_id=run_id,
-            pending_documents=pending_documents,
-            model_name=model_name,
-        )
-        if pending_documents:
+            discovered_documents = scan_archive(db, config)
             LOGGER.info(
-                "Skipped %s/%s queued PDFs because --no-gemini was enabled; %s remain unprocessed by Gemini for this run.",
-                skipped_documents,
-                len(pending_documents),
-                len(pending_documents) - skipped_documents,
+                "Scanned %s PDFs under %s",
+                len(discovered_documents),
+                config.resolved_pdf_directory,
             )
-    elif pending_documents:
-        total_pending = len(pending_documents)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [
-                executor.submit(
-                    process_document_task,
-                    database_path=database_path,
+
+            pending_documents = []
+            for document in discovered_documents:
+                if not args.force and db.successful_analysis_exists(query_id, document["sha256"]):
+                    continue
+                pending_documents.append(document)
+            if args.limit is not None:
+                pending_documents = pending_documents[: args.limit]
+
+            LOGGER.info("Queued %s PDFs for analysis", len(pending_documents))
+
+            analyzed_documents = 0
+            succeeded_documents = 0
+            failed_documents = 0
+            skipped_documents = 0
+
+            if args.no_gemini:
+                skipped_documents = maybe_skip_documents_for_no_gemini(
+                    db=db,
                     query_id=query_id,
                     run_id=run_id,
-                    document_sha256=document["sha256"],
+                    pending_documents=pending_documents,
                     model_name=model_name,
-                    question=config.question,
-                    oversize_strategy=oversize_strategy,
                 )
-                for document in pending_documents
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                analyzed_documents += 1
-                if result["status"] == "succeeded":
-                    succeeded_documents += 1
-                elif result["status"] == "failed":
-                    failed_documents += 1
+                if pending_documents:
+                    LOGGER.info(
+                        "Skipped %s/%s queued PDFs because --no-gemini was enabled; %s remain unprocessed by Gemini for this run.",
+                        skipped_documents,
+                        len(pending_documents),
+                        len(pending_documents) - skipped_documents,
+                    )
+            elif pending_documents:
+                total_pending = len(pending_documents)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = [
+                        executor.submit(
+                            process_document_task,
+                            database_path=database_path,
+                            prepared_dir=prepared_dir,
+                            query_id=query_id,
+                            run_id=run_id,
+                            document_sha256=document["sha256"],
+                            model_name=model_name,
+                            question=config.question,
+                            oversize_strategy=oversize_strategy,
+                        )
+                        for document in pending_documents
+                    ]
+                    for future in concurrent.futures.as_completed(futures):
+                        result = future.result()
+                        analyzed_documents += 1
+                        if result["status"] == "succeeded":
+                            succeeded_documents += 1
+                        elif result["status"] == "failed":
+                            failed_documents += 1
+                        else:
+                            skipped_documents += 1
+                        remaining_documents = total_pending - analyzed_documents
+                        LOGGER.info(
+                            "Processed %s/%s queued PDFs; %s remaining (succeeded=%s, failed=%s, skipped=%s).",
+                            analyzed_documents,
+                            total_pending,
+                            remaining_documents,
+                            succeeded_documents,
+                            failed_documents,
+                            skipped_documents,
+                        )
+
+            existing_synthesis = db.fetch_synthesis(query_id)
+            if should_refresh_synthesis(
+                args=args,
+                pending_documents=pending_documents,
+                existing_synthesis=existing_synthesis,
+            ):
+                responsive_documents, successful_documents = build_synthesis_documents(db, query_id)
+                synthesis_started = utc_now_iso()
+                if successful_documents == 0:
+                    db.upsert_synthesis(
+                        {
+                            "query_id": query_id,
+                            "run_id": run_id,
+                            "status": "skipped",
+                            "error_text": "No successful document analyses are available yet.",
+                            "model_name": model_name,
+                            "started_at": synthesis_started,
+                            "completed_at": utc_now_iso(),
+                        }
+                    )
+                elif not responsive_documents:
+                    db.upsert_synthesis(
+                        {
+                            "query_id": query_id,
+                            "run_id": run_id,
+                            "status": "succeeded",
+                            "answer": "No responsive documents were identified for the configured question in the analyzed archive.",
+                            "key_findings": [],
+                            "people": [],
+                            "places": [],
+                            "dates": [],
+                            "reasoning_notes": "This synthesis was produced deterministically because none of the successful per-document analyses were marked responsive.",
+                            "model_name": model_name,
+                            "started_at": synthesis_started,
+                            "completed_at": utc_now_iso(),
+                        }
+                    )
                 else:
-                    skipped_documents += 1
-                remaining_documents = total_pending - analyzed_documents
+                    client = build_client()
+                    started = time.perf_counter()
+                    prompt_payload: dict[str, Any] | None = None
+                    try:
+                        synthesis, prompt_payload, response = synthesize_project(
+                            client=client,
+                            model_name=model_name,
+                            question=config.question,
+                            total_documents=len(discovered_documents),
+                            successful_documents=successful_documents,
+                            responsive_documents=responsive_documents,
+                        )
+                        usage_fields = usage_to_cost_fields(model_name, response.usage_metadata)
+                        raw_response = json.loads(response.text)
+                        db.insert_gemini_call_log(
+                            {
+                                "run_id": run_id,
+                                "query_id": query_id,
+                                "call_type": "project_synthesis",
+                                "status": "succeeded",
+                                "prompt": prompt_payload,
+                                "response": raw_response,
+                                "prompt_tokens": usage_fields["prompt_tokens"],
+                                "candidate_tokens": usage_fields["candidate_tokens"],
+                                "total_tokens": usage_fields["total_tokens"],
+                                "input_cost_usd": usage_fields["input_cost_usd"],
+                                "output_cost_usd": usage_fields["output_cost_usd"],
+                                "total_cost_usd": usage_fields["total_cost_usd"],
+                                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                                "created_at": utc_now_iso(),
+                            }
+                        )
+                        db.upsert_synthesis(
+                            {
+                                "query_id": query_id,
+                                "run_id": run_id,
+                                "status": "succeeded",
+                                "answer": synthesis.answer,
+                                "key_findings": synthesis.key_findings,
+                                "people": synthesis.people,
+                                "places": synthesis.places,
+                                "dates": synthesis.dates,
+                                "reasoning_notes": synthesis.reasoning_notes,
+                                "raw_response": raw_response,
+                                "prompt": prompt_payload,
+                                "model_name": model_name,
+                                "started_at": synthesis_started,
+                                "completed_at": utc_now_iso(),
+                                **usage_fields,
+                            }
+                        )
+                    except Exception as exc:
+                        db.insert_gemini_call_log(
+                            {
+                                "run_id": run_id,
+                                "query_id": query_id,
+                                "call_type": "project_synthesis",
+                                "status": "failed",
+                                "error_text": str(exc),
+                                "prompt": prompt_payload,
+                                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                                "created_at": utc_now_iso(),
+                            }
+                        )
+                        db.upsert_synthesis(
+                            {
+                                "query_id": query_id,
+                                "run_id": run_id,
+                                "status": "failed",
+                                "error_text": str(exc),
+                                "prompt": prompt_payload,
+                                "model_name": model_name,
+                                "started_at": synthesis_started,
+                                "completed_at": utc_now_iso(),
+                            }
+                        )
+            elif existing_synthesis is not None:
                 LOGGER.info(
-                    "Processed %s/%s queued PDFs; %s remaining (succeeded=%s, failed=%s, skipped=%s).",
-                    analyzed_documents,
-                    total_pending,
-                    remaining_documents,
-                    succeeded_documents,
-                    failed_documents,
-                    skipped_documents,
+                    "Reusing cached project synthesis for this query; no new PDFs required Gemini analysis."
                 )
 
-    if not args.no_gemini:
-        responsive_documents, successful_documents = build_synthesis_documents(db, query_id)
-        synthesis_started = utc_now_iso()
-        if successful_documents == 0:
-            db.upsert_synthesis(
-                {
-                    "query_id": query_id,
-                    "run_id": run_id,
-                    "status": "skipped",
-                    "error_text": "No successful document analyses are available yet.",
-                    "model_name": model_name,
-                    "started_at": synthesis_started,
-                    "completed_at": utc_now_iso(),
-                }
+            upload_count = db.count_uploads_validated_this_run(run_id)
+            run_summary = db.calculate_run_summary(
+                run_id=run_id,
+                scanned_documents=len(discovered_documents),
+                queued_documents=len(pending_documents),
+                analyzed_documents=analyzed_documents,
+                succeeded_documents=succeeded_documents,
+                failed_documents=failed_documents,
+                skipped_documents=skipped_documents,
+                upload_count=upload_count,
             )
-        elif not responsive_documents:
-            db.upsert_synthesis(
-                {
-                    "query_id": query_id,
-                    "run_id": run_id,
-                    "status": "succeeded",
-                    "answer": "No responsive documents were identified for the configured question in the analyzed archive.",
-                    "key_findings": [],
-                    "people": [],
-                    "places": [],
-                    "dates": [],
-                    "reasoning_notes": "This synthesis was produced deterministically because none of the successful per-document analyses were marked responsive.",
-                    "model_name": model_name,
-                    "started_at": synthesis_started,
-                    "completed_at": utc_now_iso(),
-                }
+            run_summary["scanned_pages"] = sum(document.get("page_count") or 0 for document in discovered_documents)
+
+            report_html_path, report_xlsx_path = generate_reports(
+                db=db,
+                query_id=query_id,
+                output_dir=output_dir,
+                question=config.question,
+                project_name=config.name,
+                run_summary=run_summary,
             )
-        else:
-            client = build_client()
-            started = time.perf_counter()
-            prompt_payload: dict[str, Any] | None = None
-            try:
-                synthesis, prompt_payload, response = synthesize_project(
-                    client=client,
-                    model_name=model_name,
-                    question=config.question,
-                    total_documents=len(discovered_documents),
-                    successful_documents=successful_documents,
-                    responsive_documents=responsive_documents,
-                )
-                usage_fields = usage_to_cost_fields(model_name, response.usage_metadata)
-                raw_response = json.loads(response.text)
-                db.insert_gemini_call_log(
-                    {
-                        "run_id": run_id,
-                        "query_id": query_id,
-                        "call_type": "project_synthesis",
-                        "status": "succeeded",
-                        "prompt": prompt_payload,
-                        "response": raw_response,
-                        "prompt_tokens": usage_fields["prompt_tokens"],
-                        "candidate_tokens": usage_fields["candidate_tokens"],
-                        "total_tokens": usage_fields["total_tokens"],
-                        "input_cost_usd": usage_fields["input_cost_usd"],
-                        "output_cost_usd": usage_fields["output_cost_usd"],
-                        "total_cost_usd": usage_fields["total_cost_usd"],
-                        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-                        "created_at": utc_now_iso(),
-                    }
-                )
-                db.upsert_synthesis(
-                    {
-                        "query_id": query_id,
-                        "run_id": run_id,
-                        "status": "succeeded",
-                        "answer": synthesis.answer,
-                        "key_findings": synthesis.key_findings,
-                        "people": synthesis.people,
-                        "places": synthesis.places,
-                        "dates": synthesis.dates,
-                        "reasoning_notes": synthesis.reasoning_notes,
-                        "raw_response": raw_response,
-                        "prompt": prompt_payload,
-                        "model_name": model_name,
-                        "started_at": synthesis_started,
-                        "completed_at": utc_now_iso(),
-                        **usage_fields,
-                    }
-                )
-            except Exception as exc:
-                db.insert_gemini_call_log(
-                    {
-                        "run_id": run_id,
-                        "query_id": query_id,
-                        "call_type": "project_synthesis",
-                        "status": "failed",
-                        "error_text": str(exc),
-                        "prompt": prompt_payload,
-                        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-                        "created_at": utc_now_iso(),
-                    }
-                )
-                db.upsert_synthesis(
-                    {
-                        "query_id": query_id,
-                        "run_id": run_id,
-                        "status": "failed",
-                        "error_text": str(exc),
-                        "prompt": prompt_payload,
-                        "model_name": model_name,
-                        "started_at": synthesis_started,
-                        "completed_at": utc_now_iso(),
-                    }
-                )
-
-    upload_count = db.count_uploads_validated_this_run(run_id)
-    run_summary = db.calculate_run_summary(
-        run_id=run_id,
-        scanned_documents=len(discovered_documents),
-        queued_documents=len(pending_documents),
-        analyzed_documents=analyzed_documents,
-        succeeded_documents=succeeded_documents,
-        failed_documents=failed_documents,
-        skipped_documents=skipped_documents,
-        upload_count=upload_count,
-    )
-
-    report_html_path, report_xlsx_path = generate_reports(
-        db=db,
-        query_id=query_id,
-        output_dir=output_dir,
-        question=config.question,
-        project_name=config.name,
-        run_summary=run_summary,
-    )
-    db.finalize_run(
-        run_id=run_id,
-        completed_at=utc_now_iso(),
-        scanned_documents=len(discovered_documents),
-        queued_documents=len(pending_documents),
-        analyzed_documents=analyzed_documents,
-        succeeded_documents=succeeded_documents,
-        failed_documents=failed_documents,
-        skipped_documents=skipped_documents,
-        upload_count=upload_count,
-        report_html_path=str(report_html_path),
-        report_xlsx_path=str(report_xlsx_path),
-    )
-    LOGGER.info("Wrote %s and %s", report_html_path, report_xlsx_path)
-    db.close()
-    return 0
+            db.finalize_run(
+                run_id=run_id,
+                completed_at=utc_now_iso(),
+                scanned_documents=len(discovered_documents),
+                queued_documents=len(pending_documents),
+                analyzed_documents=analyzed_documents,
+                succeeded_documents=succeeded_documents,
+                failed_documents=failed_documents,
+                skipped_documents=skipped_documents,
+                upload_count=upload_count,
+                report_html_path=str(report_html_path),
+                report_xlsx_path=str(report_xlsx_path),
+            )
+            LOGGER.info("Wrote %s and %s", report_html_path, report_xlsx_path)
+            return 0
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

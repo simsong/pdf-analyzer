@@ -11,7 +11,7 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ContentStream
 
 from .models import PreparedCandidate
-from .utils import file_hashes
+from .utils import apply_current_umask_file_mode, file_hashes
 
 
 DEFAULT_JPEG_QUALITY = 75
@@ -416,11 +416,8 @@ def _stage_original_file(source_pdf: Path, staged_path: Path) -> None:
     if staged_path.exists():
         return
     staged_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(source_pdf, staged_path)
-        return
-    except OSError:
-        shutil.copy2(source_pdf, staged_path)
+    shutil.copyfile(source_pdf, staged_path)
+    apply_current_umask_file_mode(staged_path)
 
 
 def write_pdf_range(

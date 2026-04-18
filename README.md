@@ -1,6 +1,15 @@
-# MIT PDF Analyzer
+# PDF Analyzer
 
-This repository analyzes MIT PDFs for Louisiana connections using Gemini, with special handling for oversized scanned documents that exceed Gemini's per-file PDF limit. The code is now packaged under `src/analyze_pdfs/`, so the command-line tools work as installable package entry points instead of depending on flat top-level modules.
+This repository contains a Gemini-backed archive analysis tool for answering one research question over a directory tree of PDFs. The supported system is the `pdf_analyzer` package in `src/pdf_analyzer/`.
+
+It is designed for repeatable journalism and archival work:
+
+- recursively scan a PDF archive
+- avoid re-uploading unchanged PDFs by SHA-256
+- store per-document analyses and project synthesis in SQLite
+- rerun idempotently
+- track failures and Gemini costs
+- generate HTML and XLSX reports
 
 ## Quick Start
 
@@ -10,25 +19,13 @@ Install dependencies:
 uv sync
 ```
 
-## New Archive Workflow
-
-The repo now also contains a new package, `src/pdf_analyzer/`, for question-answering over a whole archive of PDFs. It combines:
-
-- recursive archive scanning
-- SQLite-backed idempotent reruns
-- Gemini upload caching keyed by SHA-256
-- oversized-PDF chunking
-- per-document structured evidence extraction
-- project-level synthesis
-- HTML and XLSX reporting
-
-Run it with a YAML config:
+Run the analyzer with a YAML config:
 
 ```bash
-uv run pdf-analyzer pdf-analyzer.example.yaml
+uv run analyze pdf-analyzer.example.yaml
 ```
 
-The config shape is:
+Config shape:
 
 ```yaml
 name: Example Archive
@@ -39,59 +36,29 @@ question: What does this archive say about bridge safety?
 
 Optional overrides such as `model`, `workers`, and `oversize_strategy` are also supported.
 
-Analyze one or more PDFs:
+## Outputs
 
-```bash
-uv run analyze-pdfs path/to/file.pdf
-uv run analyze-pdfs file1.pdf file2.pdf
-```
+Each project run writes durable artifacts into `output_directory`:
 
-You can also invoke the package directly:
+- `pdf_analyzer.sqlite3`
+- `report.html`
+- `report.xlsx`
+- `pdfs/` containing copied responsive PDFs only
+- a copy of the YAML config used for the run
 
-```bash
-uv run python -m analyze_pdfs path/to/file.pdf
-```
-
-Inspect the oversized-PDF preparation path without making model calls:
-
-```bash
-uv run compress-pdf path/to/file.pdf
-```
-
-Render an HTML report from archived JSONL output:
-
-```bash
-uv run analyze-pdfs-report output.jsonl --output report.html
-```
+Intermediate prepared PDFs are written to a temporary directory for the duration of the run and are not kept afterward.
 
 ## Repository Layout
 
-- `src/analyze_pdfs/`
-  The Python package containing the analyzer, PDF utilities, reporting code, pricing helpers, legacy analyzer, and packaged HTML template.
+- `src/pdf_analyzer/`
+  Supported archive-analysis package.
 - `doc/theory-of-operation.md`
-  Detailed design, data flow, chunking strategy, and archival behavior.
-- `README.md`
-  High-level project overview and getting-started guidance.
+  Current architecture, data flow, and report pipeline for `pdf_analyzer`.
+- `src/analyze_pdfs/`
+  Legacy experimental tools retained in-tree for reference. They are not part of the supported packaged workflow.
 
-## What The Tool Does
+## Notes
 
-The main analyzer workflow is:
-
-1. Inspect each input PDF locally.
-2. Send files under 50 MB directly to Gemini.
-3. Split oversized PDFs into page-range chunks when needed.
-4. Submit all final chunks together as one logical document.
-5. Archive structured results plus usage metadata for later reporting.
-
-Outputs are written to `output.jsonl` and `cost.csv` by default.
-
-## Additional Commands
-
-- `uv run analyze-mit path/to/file.pdf`
-  Runs the older legacy analyzer kept for comparison/reference.
-- `uv run list-gemini-models`
-  Lists Gemini models visible to the configured API key.
-
-## More Detail
-
-The detailed design rationale, chunking approach, prompt strategy, and report pipeline now live in [doc/theory-of-operation.md](/Users/simsong/gits/sabinok-pdf/doc/theory-of-operation.md).
+- `uv run analyze ...` is the preferred CLI.
+- `uv run pdf-analyzer ...` remains as a compatibility alias.
+- A successful rerun with no new work reuses cached per-document analyses and cached project synthesis, then re-renders the reports.

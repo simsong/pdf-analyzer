@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -80,6 +81,12 @@ def unique_copy_name(filename: str, used_names: set[str]) -> str:
     return candidate
 
 
+def apply_current_umask_file_mode(path: Path) -> None:
+    current_umask = os.umask(0)
+    os.umask(current_umask)
+    path.chmod(0o666 & ~current_umask)
+
+
 def clone_or_copy_file(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -91,9 +98,11 @@ def clone_or_copy_file(source: Path, target: Path) -> None:
             capture_output=True,
             text=True,
         )
+        apply_current_umask_file_mode(target)
         return
     except Exception:
-        shutil.copy2(source, target)
+        shutil.copyfile(source, target)
+    apply_current_umask_file_mode(target)
 
 
 def coerce_json_list(value: Any) -> list[str]:

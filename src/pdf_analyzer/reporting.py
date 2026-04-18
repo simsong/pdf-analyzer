@@ -1,4 +1,5 @@
-import json
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -6,7 +7,47 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
-from .utils import clone_or_copy_file, coerce_json_list, parse_sort_year, unique_copy_name
+from .utils import clone_or_copy_file, coerce_json_list, parse_sort_year, slugify, unique_copy_name
+
+_MONTH_NUMBERS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+_MONTH_PATTERN = "|".join(sorted(_MONTH_NUMBERS, key=len, reverse=True))
+_EXACT_DATE_PATTERN = re.compile(
+    rf"\b(?P<month>{_MONTH_PATTERN})\.?\s+"
+    r"(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+"
+    r"(?P<year>(?:18|19|20)\d{2})\b",
+    re.IGNORECASE,
+)
+_MONTH_YEAR_PATTERN = re.compile(
+    rf"\b(?P<month>{_MONTH_PATTERN})\.?\s+(?P<year>(?:18|19|20)\d{{2}})\b",
+    re.IGNORECASE,
+)
+_YEAR_PATTERN = re.compile(r"\b(?P<year>(?:18|19|20)\d{2})\b")
+_UNSORTED_DATE = (9999, 12, 31)
 
 
 def _safe_excel(value: Any) -> Any:
@@ -30,10 +71,133 @@ def _build_template_environment() -> Environment:
     )
 
 
-def _evidence_sort_key(row: dict[str, Any]) -> tuple[int, int, str, str]:
-    year = parse_sort_year(row["dates"], row["summary"]) or 9999
+def _overlaps_existing(span: tuple[int, int], occupied: list[tuple[int, int]]) -> bool:
+    return any(span[0] < other_end and other_start < span[1] for other_start, other_end in occupied)
+
+
+def _extract_date_candidates(text: str) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    occupied: list[tuple[int, int]] = []
+
+    for match in _EXACT_DATE_PATTERN.finditer(text):
+        month = _MONTH_NUMBERS[match.group("month").casefold().rstrip(".")]
+        day = int(match.group("day"))
+        year = int(match.group("year"))
+        occupied.append(match.span())
+        candidates.append(
+            {
+                "sort_key": (year, month, day),
+                "label": f"{match.group('month').rstrip('.').title()} {day}, {year}",
+            }
+        )
+
+    for match in _MONTH_YEAR_PATTERN.finditer(text):
+        if _overlaps_existing(match.span(), occupied):
+            continue
+        month = _MONTH_NUMBERS[match.group("month").casefold().rstrip(".")]
+        year = int(match.group("year"))
+        occupied.append(match.span())
+        candidates.append(
+            {
+                "sort_key": (year, month, 1),
+                "label": f"{match.group('month').rstrip('.').title()} {year}",
+            }
+        )
+
+    for match in _YEAR_PATTERN.finditer(text):
+        if _overlaps_existing(match.span(), occupied):
+            continue
+        year = int(match.group("year"))
+        candidates.append({"sort_key": (year, 1, 1), "label": str(year)})
+
+    return candidates
+
+
+def _best_date_metadata(values: list[str], fallback_text: str = "") -> tuple[tuple[int, int, int], str]:
+    text = " ".join(value for value in values if value)
+    if fallback_text:
+        text = f"{text} {fallback_text}".strip()
+    candidates = _extract_date_candidates(text)
+    if not candidates:
+        return _UNSORTED_DATE, "Undated"
+    best = min(candidates, key=lambda candidate: candidate["sort_key"])
+    return best["sort_key"], best["label"]
+
+
+def _truncate_text(text: str, limit: int = 105) -> str:
+    value = " ".join((text or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
+
+
+def _key_person_for_row(row: dict[str, Any]) -> str:
+    if row["people"]:
+        return row["people"][0]
+    if row["document_people"]:
+        return row["document_people"][0]
+    return "None"
+
+
+def _format_time_period(mentions: list[dict[str, Any]]) -> str:
+    if not mentions:
+        return "Undated"
+    first_label = mentions[0]["date_label"]
+    last_label = mentions[-1]["date_label"]
+    if first_label == last_label:
+        return first_label
+    return f"{first_label} to {last_label}"
+
+
+def _evidence_sort_key(row: dict[str, Any]) -> tuple[tuple[int, int, int], int, str, str]:
     page = row["page_number"] if isinstance(row["page_number"], int) else 10**9
-    return (year, page, row["source_filename"].casefold(), row["summary"].casefold())
+    return (row["sort_key"], page, row["source_filename"].casefold(), row["summary"].casefold())
+
+
+def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in evidence_rows:
+        seen_in_row: set[str] = set()
+        for person in row["people"]:
+            cleaned = person.strip()
+            if not cleaned or cleaned in seen_in_row:
+                continue
+            seen_in_row.add(cleaned)
+            grouped.setdefault(cleaned, []).append(
+                {
+                    "anchor": row["anchor"],
+                    "date_label": row["date_label"],
+                    "sort_key": row["sort_key"],
+                    "brief_summary": row["brief_summary"],
+                    "source_filename": row["source_filename"],
+                    "page_number": row["page_number"],
+                }
+            )
+
+    used_toggle_ids: set[str] = set()
+    people_index: list[dict[str, Any]] = []
+    for person, mentions in grouped.items():
+        mentions.sort(
+            key=lambda mention: (
+                mention["sort_key"],
+                mention["page_number"] if isinstance(mention["page_number"], int) else 10**9,
+                mention["source_filename"].casefold(),
+                mention["brief_summary"].casefold(),
+            )
+        )
+        toggle_id = unique_copy_name(f"person-{slugify(person)}", used_toggle_ids)
+        people_index.append(
+            {
+                "person": person,
+                "mention_count": len(mentions),
+                "time_period": _format_time_period(mentions),
+                "mentions": mentions,
+                "toggle_id": toggle_id,
+            }
+        )
+
+    people_index.sort(key=lambda row: (-row["mention_count"], row["person"].casefold()))
+    return people_index
 
 
 def generate_reports(
@@ -47,15 +211,23 @@ def generate_reports(
 ) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     pdf_dir = output_dir / "pdfs"
+    if pdf_dir.exists():
+        shutil.rmtree(pdf_dir)
     pdf_dir.mkdir(parents=True, exist_ok=True)
 
     document_rows = [dict(row) for row in db.report_document_rows(query_id)]
     evidence_rows_raw = [dict(row) for row in db.report_evidence_rows(query_id)]
     failure_rows = [dict(row) for row in db.report_failure_rows(query_id)]
     synthesis_row = db.fetch_synthesis(query_id)
+
+    responsive_sha256s = {row["document_sha256"] for row in evidence_rows_raw}
+    responsive_sha256s.update(row["sha256"] for row in document_rows if row.get("responsive") == 1)
+
     used_names: set[str] = set()
     linked_files: dict[str, str] = {}
     for row in document_rows:
+        if row["sha256"] not in responsive_sha256s:
+            continue
         source_path = row.get("source_path")
         if not source_path:
             continue
@@ -75,6 +247,7 @@ def generate_reports(
         document_people = coerce_json_list(row["document_people_json"])
         document_places = coerce_json_list(row["document_places_json"])
         document_dates = coerce_json_list(row["document_dates_json"])
+        sort_key, date_label = _best_date_metadata(dates, row["evidence_summary"] or row["document_summary"] or "")
         evidence_rows.append(
             {
                 "document_sha256": row["document_sha256"],
@@ -84,20 +257,27 @@ def generate_reports(
                 "relevance_score": row["relevance_score"],
                 "page_number": row["page_number"],
                 "summary": row["evidence_summary"],
+                "brief_summary": _truncate_text(row["evidence_summary"] or row["document_summary"] or ""),
                 "people": people,
                 "places": places,
                 "dates": dates,
                 "document_people": document_people,
                 "document_places": document_places,
                 "document_dates": document_dates,
+                "date_label": date_label,
+                "sort_key": sort_key,
+                "key_person": "",
+                "anchor": "",
                 "report_href": linked_files.get(row["document_sha256"]),
             }
         )
     evidence_rows.sort(key=_evidence_sort_key)
+    for index, row in enumerate(evidence_rows, start=1):
+        row["anchor"] = f"evidence-{index}"
+        row["key_person"] = _key_person_for_row(row)
 
-    unanalyzed_rows = [
-        row for row in document_rows if row.get("status") != "succeeded"
-    ]
+    people_index = _build_people_index(evidence_rows)
+    unanalyzed_rows = [row for row in document_rows if row.get("status") != "succeeded"]
 
     synthesis_payload = None
     if synthesis_row is not None and synthesis_row["status"] == "succeeded":
@@ -110,13 +290,20 @@ def generate_reports(
             "reasoning_notes": synthesis_row["reasoning_notes"],
         }
 
+    total_pages_scanned = (
+        int(run_summary["scanned_pages"])
+        if run_summary and run_summary.get("scanned_pages") is not None
+        else sum(int(row.get("stored_page_count") or 0) for row in document_rows)
+    )
     summary = {
         "total_documents": len(document_rows),
+        "total_pages_scanned": total_pages_scanned,
         "responsive_evidence_rows": len(evidence_rows),
         "responsive_documents": sum(1 for row in document_rows if row.get("responsive") == 1),
         "failed_documents": len(failure_rows),
         "unanalyzed_documents": len(unanalyzed_rows),
     }
+
     env = _build_template_environment()
     template = env.get_template("report.html.jinja")
     html = template.render(
@@ -126,6 +313,7 @@ def generate_reports(
         run_summary=run_summary,
         synthesis=synthesis_payload,
         evidence_rows=evidence_rows,
+        people_index=people_index,
         document_rows=document_rows,
         unanalyzed_rows=unanalyzed_rows,
         failure_rows=failure_rows,
@@ -138,9 +326,11 @@ def generate_reports(
     evidence_sheet.title = "Evidence"
     evidence_sheet.append(
         [
+            "sort_date",
             "sort_year",
             "source_filename",
             "page_number",
+            "key_person",
             "summary",
             "people",
             "places",
@@ -153,9 +343,11 @@ def generate_reports(
     for row in evidence_rows:
         evidence_sheet.append(
             [
+                _safe_excel(row["date_label"]),
                 _safe_excel(parse_sort_year(row["dates"], row["summary"])),
                 _safe_excel(row["source_filename"]),
                 _safe_excel(row["page_number"]),
+                _safe_excel(row["key_person"]),
                 _safe_excel(row["summary"]),
                 _safe_excel(_safe_display_list(row["people"])),
                 _safe_excel(_safe_display_list(row["places"])),
