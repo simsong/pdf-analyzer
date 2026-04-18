@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+analyze = "pdf_analyzer.main:main"
 analyze-pdfs = "analyze_pdfs.analyzer2:main"
 analyze-mit = "analyze_pdfs.mit_analyzer:main"
 compress-pdf = "analyze_pdfs.pdf_compress:main"
