@@ -8,3 +8,7 @@ __pycache__
 out.html
 MIT?References
 .DS_Store
+tests/artifacts/
+winter-study.yaml
+winter-study
+*.yaml

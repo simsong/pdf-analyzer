@@ -1,0 +1,133 @@
+records:
+  - id: 1
+    name: Bernard A. Schriever
+    mentions: 5
+    time_period: 1959 to October 7, 1960
+  - id: 2
+    name: Gordon N. Thayer
+    mentions: 5
+    time_period: 1959 to Undated
+  - id: 3
+    name: Gordon Thayer
+    mentions: 3
+    time_period: February 1960 to July 1, 1960
+  - id: 4
+    name: John L. Lombardo
+    mentions: 3
+    time_period: 1959 to July 1, 1960
+  - id: 5
+    name: A. G. Hill
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 6
+    name: Allen Puckett
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 7
+    name: Bernard Schriever
+    mentions: 2
+    time_period: 1959 to 1961
+  - id: 8
+    name: C. W. Halligan
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 9
+    name: Carl Overhage
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 10
+    name: Emanuel Piore
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 11
+    name: H. Guyford Stever
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 12
+    name: Ivan Getting
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 13
+    name: J. F. Jacobs
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 14
+    name: Jerome B. Wiesner
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 15
+    name: John F. Jacobs
+    mentions: 2
+    time_period: 1959 to November 30, 1959
+  - id: 16
+    name: R. F. Mettler
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 17
+    name: W. H. Radford
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 18
+    name: W. O. Baker
+    mentions: 2
+    time_period: April 1960 to July 1, 1960
+  - id: 19
+    name: Al Hill
+    mentions: 1
+    time_period: 1959
+  - id: 20
+    name: Albert G. Hill
+    mentions: 1
+    time_period: January 1960
+  - id: 21
+    name: Clair Halligan
+    mentions: 1
+    time_period: 1961
+  - id: 22
+    name: Clair W. Halligan
+    mentions: 1
+    time_period: January 1960
+  - id: 23
+    name: Eugene G. Fubini
+    mentions: 1
+    time_period: 1959
+  - id: 24
+    name: Jack Ruina
+    mentions: 1
+    time_period: 1959
+  - id: 25
+    name: John F. Loosbrock
+    mentions: 1
+    time_period: October 7, 1960
+  - id: 26
+    name: Julius A. Stratton
+    mentions: 1
+    time_period: January 1960
+  - id: 27
+    name: Kenneth P. Bergquist
+    mentions: 1
+    time_period: October 7, 1960
+  - id: 28
+    name: Lester R. Allen, Jr.
+    mentions: 1
+    time_period: October 7, 1960
+  - id: 29
+    name: Norman Waks
+    mentions: 1
+    time_period: August 9, 1960
+  - id: 30
+    name: Thomas Power
+    mentions: 1
+    time_period: 1959
+  - id: 31
+    name: Walter S. Attridge
+    mentions: 1
+    time_period: 1959
+  - id: 32
+    name: William E. Holden
+    mentions: 1
+    time_period: 1959
+  - id: 33
+    name: William Sen
+    mentions: 1
+    time_period: October 7, 1960
