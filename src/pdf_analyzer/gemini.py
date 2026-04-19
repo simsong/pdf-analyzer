@@ -131,8 +131,10 @@ def build_document_prompt(
         "Return only structured JSON matching the provided schema.",
         "Do not quote the PDF directly. Paraphrase the responsive material.",
         "If the document is not responsive, set responsive=false, keep the score low, and leave evidence_items empty.",
-        "Use original document page numbers. If a page number is uncertain, omit it rather than guess.",
-        "Capture people, places, and dates whenever they materially support the answer.",
+        "Use original document page numbers. Each evidence item must describe one responsive page or one contiguous responsive page range from the original document.",
+        "Set page_start for every evidence item. Set page_end only when the evidence spans more than one page.",
+        "List people, places, and dates only when they are mentioned or clearly referenced within that specific page or page range.",
+        "Order each evidence item's people list by importance to that specific page or page range, most important first.",
     ]
     if len(candidates) > 1:
         prompt_lines.append(
@@ -234,6 +236,7 @@ def synthesize_project(
 
 
 def usage_to_cost_fields(
+    pricing_snapshot: dict[str, Any] | None,
     model_name: str,
     usage: GenerateContentResponseUsageMetadata | None,
 ) -> dict[str, Any]:
@@ -247,11 +250,21 @@ def usage_to_cost_fields(
             "total_cost_usd": 0.0,
         }
     estimate = estimate_usage_cost(
+        pricing_snapshot,
         model_name,
         prompt_tokens=usage.prompt_token_count or 0,
         candidate_tokens=usage.candidates_token_count or 0,
         total_tokens=usage.total_token_count or 0,
     )
+    if estimate is None:
+        return {
+            "prompt_tokens": int(usage.prompt_token_count or 0),
+            "candidate_tokens": int(usage.candidates_token_count or 0),
+            "total_tokens": int(usage.total_token_count or 0),
+            "input_cost_usd": 0.0,
+            "output_cost_usd": 0.0,
+            "total_cost_usd": 0.0,
+        }
     return {
         "prompt_tokens": estimate.prompt_tokens,
         "candidate_tokens": estimate.candidate_tokens,

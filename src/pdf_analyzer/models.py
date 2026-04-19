@@ -7,12 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field
 class EvidenceItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_number: int | None = Field(
+    page_start: int | None = Field(
         default=None,
-        description="1-based starting page number in the original PDF.",
+        description="1-based starting page number in the original PDF for this responsive page or contiguous page range.",
+    )
+    page_end: int | None = Field(
+        default=None,
+        description="1-based ending page number in the original PDF when the responsive evidence spans a page range. Omit for a single-page reference.",
     )
     summary: str = Field(
-        description="A concise paraphrase of the responsive material on this page."
+        description="A concise paraphrase of the responsive material in this page or page range."
     )
     people: list[str] = Field(default_factory=list)
     places: list[str] = Field(default_factory=list)
@@ -59,4 +63,3 @@ class PreparedCandidate:
     method: str
     start_page: int | None = None
     end_page: int | None = None
-

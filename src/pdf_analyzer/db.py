@@ -199,6 +199,19 @@ class Database:
                 FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS object_store (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                object_name TEXT NOT NULL,
+                stored_at TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                fetched_by TEXT NOT NULL,
+                json_object TEXT NOT NULL,
+                content_sha256 TEXT,
+                content_type TEXT,
+                source_etag TEXT,
+                source_last_modified TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS gemini_call_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id INTEGER,
@@ -228,11 +241,23 @@ class Database:
                 ON document_paths(sha256);
             CREATE INDEX IF NOT EXISTS idx_document_analyses_query_status
                 ON document_analyses(query_id, status);
+            CREATE INDEX IF NOT EXISTS idx_object_store_name_stored
+                ON object_store(object_name, stored_at DESC);
             CREATE INDEX IF NOT EXISTS idx_gemini_call_log_run
                 ON gemini_call_log(run_id, created_at);
             """
         )
+        self._ensure_column("analysis_evidence", "page_start", "INTEGER")
+        self._ensure_column("analysis_evidence", "page_end", "INTEGER")
         conn.commit()
+
+    def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:
+        rows = self.connection().execute(f"PRAGMA table_info({table_name})").fetchall()
+        if any(row["name"] == column_name for row in rows):
+            return
+        self.connection().execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+        )
 
     def set_metadata(self, key: str, value: str) -> None:
         self.connection().execute(
@@ -251,6 +276,61 @@ class Database:
             (key,),
         ).fetchone()
         return None if row is None else str(row["value"])
+
+    def insert_object(
+        self,
+        *,
+        object_name: str,
+        stored_at: str,
+        source_url: str,
+        fetched_by: str,
+        json_object: dict[str, Any],
+        content_sha256: str | None = None,
+        content_type: str | None = None,
+        source_etag: str | None = None,
+        source_last_modified: str | None = None,
+    ) -> int:
+        cursor = self.connection().execute(
+            """
+            INSERT INTO object_store (
+                object_name,
+                stored_at,
+                source_url,
+                fetched_by,
+                json_object,
+                content_sha256,
+                content_type,
+                source_etag,
+                source_last_modified
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                object_name,
+                stored_at,
+                source_url,
+                fetched_by,
+                json.dumps(json_object, sort_keys=True),
+                content_sha256,
+                content_type,
+                source_etag,
+                source_last_modified,
+            ),
+        )
+        self.connection().commit()
+        return int(cursor.lastrowid)
+
+    def fetch_latest_object(self, object_name: str) -> sqlite3.Row | None:
+        return self.connection().execute(
+            """
+            SELECT *
+            FROM object_store
+            WHERE object_name = ?
+            ORDER BY stored_at DESC, id DESC
+            LIMIT 1
+            """,
+            (object_name,),
+        ).fetchone()
 
     def upsert_document(
         self,
@@ -582,6 +662,43 @@ class Database:
         )
         return payload
 
+    def calculate_query_usage_summary(self, query_id: int) -> dict[str, Any]:
+        document_summary = self.connection().execute(
+            """
+            SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(candidate_tokens), 0) AS candidate_tokens,
+                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                   COALESCE(SUM(input_cost_usd), 0) AS input_cost_usd,
+                   COALESCE(SUM(output_cost_usd), 0) AS output_cost_usd,
+                   COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd
+            FROM document_analyses
+            WHERE query_id = ?
+            """,
+            (query_id,),
+        ).fetchone()
+        synthesis_summary = self.connection().execute(
+            """
+            SELECT COALESCE(prompt_tokens, 0) AS prompt_tokens,
+                   COALESCE(candidate_tokens, 0) AS candidate_tokens,
+                   COALESCE(total_tokens, 0) AS total_tokens,
+                   COALESCE(input_cost_usd, 0) AS input_cost_usd,
+                   COALESCE(output_cost_usd, 0) AS output_cost_usd,
+                   COALESCE(total_cost_usd, 0) AS total_cost_usd
+            FROM project_syntheses
+            WHERE query_id = ?
+            """,
+            (query_id,),
+        ).fetchone()
+        synthesis_payload = dict(synthesis_summary) if synthesis_summary is not None else {}
+        return {
+            "prompt_tokens": int(document_summary["prompt_tokens"]) + int(synthesis_payload.get("prompt_tokens", 0)),
+            "candidate_tokens": int(document_summary["candidate_tokens"]) + int(synthesis_payload.get("candidate_tokens", 0)),
+            "total_tokens": int(document_summary["total_tokens"]) + int(synthesis_payload.get("total_tokens", 0)),
+            "input_cost_usd": float(document_summary["input_cost_usd"]) + float(synthesis_payload.get("input_cost_usd", 0.0)),
+            "output_cost_usd": float(document_summary["output_cost_usd"]) + float(synthesis_payload.get("output_cost_usd", 0.0)),
+            "total_cost_usd": float(document_summary["total_cost_usd"]) + float(synthesis_payload.get("total_cost_usd", 0.0)),
+        }
+
     def upsert_upload(
         self,
         *,
@@ -786,18 +903,22 @@ class Database:
                 INSERT INTO analysis_evidence (
                     analysis_id,
                     ordinal,
+                    page_start,
+                    page_end,
                     page_number,
                     summary,
                     people_json,
                     places_json,
                     dates_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
                     ordinal,
-                    item.get("page_number"),
+                    item.get("page_start"),
+                    item.get("page_end"),
+                    item.get("page_start") if item.get("page_start") is not None else item.get("page_number"),
                     item["summary"],
                     json.dumps(item.get("people", []), sort_keys=True),
                     json.dumps(item.get("places", []), sort_keys=True),
@@ -953,11 +1074,10 @@ class Database:
                        da.source_filename,
                        da.summary AS document_summary,
                        da.relevance_score,
-                       da.people_json AS document_people_json,
-                       da.places_json AS document_places_json,
-                       da.dates_json AS document_dates_json,
                        ae.ordinal,
-                       ae.page_number,
+                       COALESCE(ae.page_start, ae.page_number) AS page_start,
+                       ae.page_end,
+                       COALESCE(ae.page_start, ae.page_number) AS page_number,
                        ae.summary AS evidence_summary,
                        ae.people_json,
                        ae.places_json,

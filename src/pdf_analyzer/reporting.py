@@ -7,6 +7,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
+from .pricing import PRICING_OBJECT_NAME
 from .utils import clone_or_copy_file, coerce_json_list, parse_sort_year, slugify, unique_copy_name
 
 _MONTH_NUMBERS = {
@@ -46,8 +47,17 @@ _MONTH_YEAR_PATTERN = re.compile(
     rf"\b(?P<month>{_MONTH_PATTERN})\.?\s+(?P<year>(?:18|19|20)\d{{2}})\b",
     re.IGNORECASE,
 )
+_QUALIFIED_YEAR_PATTERN = re.compile(
+    r"\b(?P<qualifier>early|mid|late)[-\s]+(?P<year>(?:18|19|20)\d{2})\b",
+    re.IGNORECASE,
+)
 _YEAR_PATTERN = re.compile(r"\b(?P<year>(?:18|19|20)\d{2})\b")
 _UNSORTED_DATE = (9999, 12, 31)
+_QUALIFIER_MONTHS = {
+    "early": 2,
+    "mid": 6,
+    "late": 10,
+}
 
 
 def _safe_excel(value: Any) -> Any:
@@ -104,6 +114,19 @@ def _extract_date_candidates(text: str) -> list[dict[str, Any]]:
             }
         )
 
+    for match in _QUALIFIED_YEAR_PATTERN.finditer(text):
+        if _overlaps_existing(match.span(), occupied):
+            continue
+        qualifier = match.group("qualifier").casefold()
+        year = int(match.group("year"))
+        occupied.append(match.span())
+        candidates.append(
+            {
+                "sort_key": (year, _QUALIFIER_MONTHS[qualifier], 1),
+                "label": f"{qualifier} {year}",
+            }
+        )
+
     for match in _YEAR_PATTERN.finditer(text):
         if _overlaps_existing(match.span(), occupied):
             continue
@@ -113,15 +136,35 @@ def _extract_date_candidates(text: str) -> list[dict[str, Any]]:
     return candidates
 
 
-def _best_date_metadata(values: list[str], fallback_text: str = "") -> tuple[tuple[int, int, int], str]:
+def _best_date_metadata(
+    values: list[str],
+    fallback_text: str = "",
+) -> tuple[tuple[int, int, int], str, str]:
     text = " ".join(value for value in values if value)
     if fallback_text:
         text = f"{text} {fallback_text}".strip()
     candidates = _extract_date_candidates(text)
     if not candidates:
-        return _UNSORTED_DATE, "Undated"
-    best = min(candidates, key=lambda candidate: candidate["sort_key"])
-    return best["sort_key"], best["label"]
+        return _UNSORTED_DATE, "Undated", "Undated"
+
+    candidates.sort(key=lambda candidate: (candidate["sort_key"], candidate["label"].casefold()))
+    distinct_candidates: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for candidate in candidates:
+        label_key = candidate["label"].casefold()
+        if label_key in seen_labels:
+            continue
+        seen_labels.add(label_key)
+        distinct_candidates.append(candidate)
+
+    best = distinct_candidates[0]
+    if len(distinct_candidates) == 1:
+        return best["sort_key"], best["label"], best["label"]
+    return (
+        best["sort_key"],
+        best["label"],
+        f"{distinct_candidates[0]['label']} -> {distinct_candidates[1]['label']}",
+    )
 
 
 def _truncate_text(text: str, limit: int = 105) -> str:
@@ -134,17 +177,23 @@ def _truncate_text(text: str, limit: int = 105) -> str:
 def _key_person_for_row(row: dict[str, Any]) -> str:
     if row["people"]:
         return row["people"][0]
-    if row["document_people"]:
-        return row["document_people"][0]
-    return "None"
+    return "No named person"
 
 
-def _pdf_page_href(report_href: str | None, page_number: int | None) -> str | None:
+def _page_label(page_start: int | None, page_end: int | None) -> str:
+    if not isinstance(page_start, int) or page_start < 1:
+        return "Pages unknown"
+    if isinstance(page_end, int) and page_end >= page_start and page_end != page_start:
+        return f"Pages {page_start}-{page_end}"
+    return f"Page {page_start}"
+
+
+def _pdf_page_href(report_href: str | None, page_start: int | None) -> str | None:
     if not report_href:
         return None
-    if not isinstance(page_number, int) or page_number < 1:
+    if not isinstance(page_start, int) or page_start < 1:
         return report_href
-    return f"{report_href}#page={page_number}"
+    return f"{report_href}#page={page_start}"
 
 
 def _format_time_period(mentions: list[dict[str, Any]]) -> str:
@@ -157,8 +206,24 @@ def _format_time_period(mentions: list[dict[str, Any]]) -> str:
     return f"{first_label} to {last_label}"
 
 
+def _pluralize(value: int, singular: str) -> str:
+    suffix = "" if value == 1 else "s"
+    return f"{value} {singular}{suffix}"
+
+
+def _errors_label(*, failure_count: int, unanalyzed_count: int) -> str:
+    parts: list[str] = []
+    if failure_count > 0:
+        parts.append(_pluralize(failure_count, "failure"))
+    if unanalyzed_count > 0:
+        parts.append(_pluralize(unanalyzed_count, "unanalyzed"))
+    if not parts:
+        return "none"
+    return ", ".join(parts)
+
+
 def _evidence_sort_key(row: dict[str, Any]) -> tuple[tuple[int, int, int], int, str, str]:
-    page = row["page_number"] if isinstance(row["page_number"], int) else 10**9
+    page = row["page_start"] if isinstance(row["page_start"], int) else 10**9
     return (row["sort_key"], page, row["source_filename"].casefold(), row["summary"].casefold())
 
 
@@ -175,11 +240,14 @@ def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, A
                 {
                     "anchor": row["anchor"],
                     "date_label": row["date_label"],
+                    "date_badge_label": row["date_badge_label"],
                     "sort_key": row["sort_key"],
                     "brief_summary": row["brief_summary"],
                     "source_filename": row["source_filename"],
-                    "page_number": row["page_number"],
-                    "page_href": _pdf_page_href(row.get("report_href"), row["page_number"]),
+                    "page_start": row["page_start"],
+                    "page_label": row["page_label"],
+                    "page_href": _pdf_page_href(row.get("report_href"), row["page_start"]),
+                    "people": row["people"],
                 }
             )
 
@@ -189,7 +257,7 @@ def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, A
         mentions.sort(
             key=lambda mention: (
                 mention["sort_key"],
-                mention["page_number"] if isinstance(mention["page_number"], int) else 10**9,
+                mention["page_start"] if isinstance(mention.get("page_start"), int) else 10**9,
                 mention["source_filename"].casefold(),
                 mention["brief_summary"].casefold(),
             )
@@ -207,6 +275,45 @@ def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, A
 
     people_index.sort(key=lambda row: (-row["mention_count"], row["person"].casefold()))
     return people_index
+
+
+def _build_responsive_documents_index(
+    document_rows: list[dict[str, Any]],
+    evidence_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows_by_sha: dict[str, list[dict[str, Any]]] = {}
+    for row in evidence_rows:
+        rows_by_sha.setdefault(row["document_sha256"], []).append(row)
+
+    responsive_documents: list[dict[str, Any]] = []
+    for document_row in document_rows:
+        if document_row.get("responsive") != 1:
+            continue
+        evidence_items = rows_by_sha.get(document_row["sha256"], [])
+        if not evidence_items:
+            continue
+        evidence_items.sort(key=_evidence_sort_key)
+        responsive_documents.append(
+            {
+                "document_sha256": document_row["sha256"],
+                "anchor": f"document-{slugify(document_row['canonical_filename'])}-{document_row['sha256'][:8]}",
+                "source_filename": document_row["canonical_filename"],
+                "document_summary": document_row.get("summary") or "",
+                "report_href": evidence_items[0].get("report_href"),
+                "evidence_items": [
+                    {
+                        "anchor": item["anchor"],
+                        "page_label": item["page_label"],
+                        "page_href": item.get("page_href"),
+                        "people": item["people"],
+                        "brief_summary": item["brief_summary"],
+                    }
+                    for item in evidence_items
+                ],
+            }
+        )
+    responsive_documents.sort(key=lambda row: row["source_filename"].casefold())
+    return responsive_documents
 
 
 def generate_reports(
@@ -228,6 +335,8 @@ def generate_reports(
     evidence_rows_raw = [dict(row) for row in db.report_evidence_rows(query_id)]
     failure_rows = [dict(row) for row in db.report_failure_rows(query_id)]
     synthesis_row = db.fetch_synthesis(query_id)
+    usage_summary = db.calculate_query_usage_summary(query_id)
+    pricing_snapshot_row = db.fetch_latest_object(PRICING_OBJECT_NAME)
 
     responsive_sha256s = {row["document_sha256"] for row in evidence_rows_raw}
     responsive_sha256s.update(row["sha256"] for row in document_rows if row.get("responsive") == 1)
@@ -253,10 +362,10 @@ def generate_reports(
         dates = coerce_json_list(row["dates_json"])
         people = coerce_json_list(row["people_json"])
         places = coerce_json_list(row["places_json"])
-        document_people = coerce_json_list(row["document_people_json"])
-        document_places = coerce_json_list(row["document_places_json"])
-        document_dates = coerce_json_list(row["document_dates_json"])
-        sort_key, date_label = _best_date_metadata(dates, row["evidence_summary"] or row["document_summary"] or "")
+        sort_key, date_label, date_badge_label = _best_date_metadata(
+            dates,
+            row["evidence_summary"] or row["document_summary"] or "",
+        )
         evidence_rows.append(
             {
                 "document_sha256": row["document_sha256"],
@@ -264,30 +373,37 @@ def generate_reports(
                 "source_path": row["source_path"],
                 "document_summary": row["document_summary"] or "",
                 "relevance_score": row["relevance_score"],
-                "page_number": row["page_number"],
+                "page_start": row["page_start"],
+                "page_end": row["page_end"],
+                "page_label": _page_label(row["page_start"], row["page_end"]),
                 "summary": row["evidence_summary"],
                 "brief_summary": _truncate_text(row["evidence_summary"] or row["document_summary"] or ""),
                 "people": people,
                 "places": places,
                 "dates": dates,
-                "document_people": document_people,
-                "document_places": document_places,
-                "document_dates": document_dates,
                 "date_label": date_label,
+                "date_badge_label": date_badge_label,
                 "sort_key": sort_key,
                 "key_person": "",
                 "anchor": "",
                 "report_href": linked_files.get(row["document_sha256"]),
                 "page_href": _pdf_page_href(
                     linked_files.get(row["document_sha256"]),
-                    row["page_number"],
+                    row["page_start"],
                 ),
+                "document_anchor": "",
             }
         )
     evidence_rows.sort(key=_evidence_sort_key)
     for index, row in enumerate(evidence_rows, start=1):
         row["anchor"] = f"evidence-{index}"
         row["key_person"] = _key_person_for_row(row)
+    responsive_documents_index = _build_responsive_documents_index(document_rows, evidence_rows)
+    document_anchor_map = {
+        row["document_sha256"]: row["anchor"] for row in responsive_documents_index
+    }
+    for row in evidence_rows:
+        row["document_anchor"] = document_anchor_map.get(row["document_sha256"], "")
 
     people_index = _build_people_index(evidence_rows)
     unanalyzed_rows = [row for row in document_rows if row.get("status") != "succeeded"]
@@ -315,7 +431,23 @@ def generate_reports(
         "responsive_documents": sum(1 for row in document_rows if row.get("responsive") == 1),
         "failed_documents": len(failure_rows),
         "unanalyzed_documents": len(unanalyzed_rows),
+        "errors_label": _errors_label(
+            failure_count=len(failure_rows),
+            unanalyzed_count=len(unanalyzed_rows),
+        ),
+        "responsive_document_index_count": len(responsive_documents_index),
     }
+    if run_summary is not None:
+        run_summary = {
+            **run_summary,
+            "prompt_tokens": usage_summary["prompt_tokens"],
+            "candidate_tokens": usage_summary["candidate_tokens"],
+            "total_tokens": usage_summary["total_tokens"],
+            "input_cost_usd": usage_summary["input_cost_usd"],
+            "output_cost_usd": usage_summary["output_cost_usd"],
+            "total_cost_usd": usage_summary["total_cost_usd"],
+            "pricing_available": pricing_snapshot_row is not None,
+        }
 
     env = _build_template_environment()
     template = env.get_template("report.html.jinja")
@@ -326,6 +458,7 @@ def generate_reports(
         run_summary=run_summary,
         synthesis=synthesis_payload,
         evidence_rows=evidence_rows,
+        responsive_documents_index=responsive_documents_index,
         people_index=people_index,
         document_rows=document_rows,
         unanalyzed_rows=unanalyzed_rows,
@@ -342,7 +475,9 @@ def generate_reports(
             "sort_date",
             "sort_year",
             "source_filename",
-            "page_number",
+            "page_start",
+            "page_end",
+            "page_label",
             "key_person",
             "summary",
             "people",
@@ -359,7 +494,9 @@ def generate_reports(
                 _safe_excel(row["date_label"]),
                 _safe_excel(parse_sort_year(row["dates"], row["summary"])),
                 _safe_excel(row["source_filename"]),
-                _safe_excel(row["page_number"]),
+                _safe_excel(row["page_start"]),
+                _safe_excel(row["page_end"]),
+                _safe_excel(row["page_label"]),
                 _safe_excel(row["key_person"]),
                 _safe_excel(row["summary"]),
                 _safe_excel(_safe_display_list(row["people"])),

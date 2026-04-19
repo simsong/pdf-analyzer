@@ -138,7 +138,7 @@ def test_pdf_analyzer_live_single_pdf(tmp_path: Path, monkeypatch: pytest.Monkey
 
     evidence = conn.execute(
         """
-        SELECT page_number, summary, people_json, places_json, dates_json
+        SELECT page_start, page_end, summary, people_json, places_json, dates_json
         FROM analysis_evidence
         ORDER BY ordinal
         """
@@ -151,7 +151,7 @@ def test_pdf_analyzer_live_single_pdf(tmp_path: Path, monkeypatch: pytest.Monkey
         )
         for item in evidence
     ).casefold()
-    assert any(row["page_number"] in (1, None) for row in evidence)
+    assert any(row["page_start"] in (1, None) for row in evidence)
     assert "cedar bridge" in evidence_blob or "bridge" in evidence_blob
     assert "alice" in evidence_blob
     assert "2021" in evidence_blob

@@ -167,6 +167,16 @@
       margin-top: 0.55rem;
       font-size: 0.92rem;
     }
+    .meta-grid > div {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .meta-grid a,
+    .meta-grid .chips {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .disclosure-cell {
       width: 2rem;
       padding-right: 0;
@@ -229,13 +239,13 @@
         <div class="card"><div class="label">Pages Scanned</div><div class="value">{{ "{:,}".format(summary.total_pages_scanned) }}</div></div>
         <div class="card"><div class="label">Responsive PDFs</div><div class="value">{{ "{:,}".format(summary.responsive_documents) }}</div></div>
         <div class="card"><div class="label">Evidence Rows</div><div class="value">{{ "{:,}".format(summary.responsive_evidence_rows) }}</div></div>
-        <div class="card"><div class="label">Failures</div><div class="value">{{ "{:,}".format(summary.failed_documents) }}</div></div>
-        <div class="card"><div class="label">Unanalyzed</div><div class="value">{{ "{:,}".format(summary.unanalyzed_documents) }}</div></div>
+        <div class="card"><div class="label">Errors</div><div class="value">{{ summary.errors_label }}</div></div>
         {% if run_summary %}
-        <div class="card"><div class="label">Run Cost</div><div class="value">${{ '%.4f'|format(run_summary.total_cost_usd) }}</div></div>
+        {% if run_summary.pricing_available %}
+        <div class="card"><div class="label">Cost</div><div class="value">${{ '%.4f'|format(run_summary.total_cost_usd) }}</div></div>
+        {% endif %}
         <div class="card"><div class="label">Prompt Tokens</div><div class="value">{{ "{:,}".format(run_summary.prompt_tokens) }}</div></div>
         <div class="card"><div class="label">Output Tokens</div><div class="value">{{ "{:,}".format(run_summary.candidate_tokens) }}</div></div>
-        <div class="card"><div class="label">Uploads</div><div class="value">{{ "{:,}".format(run_summary.upload_count) }}</div></div>
         {% endif %}
       </div>
     </section>
@@ -277,7 +287,7 @@
         <tbody>
           {% for row in evidence_rows %}
           <tr>
-            <td>{{ row.date_label }}</td>
+            <td>{{ row.date_badge_label }}</td>
             <td>{{ row.key_person }}</td>
             <td><a class="summary-link" href="#{{ row.anchor }}">{{ row.brief_summary }}</a></td>
           </tr>
@@ -318,8 +328,8 @@
               <div class="mention-list">
                 {% for mention in person.mentions %}
                 <div class="mention-line">
-                  <a href="#{{ mention.anchor }}">{{ mention.date_label }}</a> | {{ mention.brief_summary }}
-                  <span class="chips">({{ mention.source_filename }}{% if mention.page_number %}, {% if mention.page_href %}<a href="{{ mention.page_href }}">p. {{ mention.page_number }}</a>{% else %}p. {{ mention.page_number }}{% endif %}{% endif %})</span>
+                  <a href="#{{ mention.anchor }}">{{ mention.date_badge_label }}</a> | {{ mention.brief_summary }}
+                  <span class="chips">({{ mention.source_filename }}{% if mention.page_label %}, {% if mention.page_href %}<a href="{{ mention.page_href }}">{{ mention.page_label }}</a>{% else %}{{ mention.page_label }}{% endif %}{% endif %})</span>
                 </div>
                 {% endfor %}
               </div>
@@ -334,15 +344,16 @@
     </section>
 
     <section>
-      <h2>Responsive Evidence</h2>
+      <h2>Responsive Evidence Timeline</h2>
+      <p class="meta">Each filename links to its entry in the Responsive Documents section.</p>
       {% if evidence_rows %}
       <div class="evidence-list">
         {% for row in evidence_rows %}
         <article class="evidence-card" id="{{ row.anchor }}">
           <div class="eyebrow">
-            <span class="pill date-pill">{{ row.date_label }}</span>
+            <span class="pill date-pill">{{ row.date_badge_label }}</span>
             <span class="pill">{{ row.key_person }}</span>
-            {% if row.page_number %}{% if row.page_href %}<a class="pill" href="{{ row.page_href }}">Page {{ row.page_number }}</a>{% else %}<span class="pill">Page {{ row.page_number }}</span>{% endif %}{% endif %}
+            {% if row.page_label %}{% if row.page_href %}<a class="pill" href="{{ row.page_href }}">{{ row.page_label }}</a>{% else %}<span class="pill">{{ row.page_label }}</span>{% endif %}{% endif %}
             <span class="pill">Score {% if row.relevance_score is not none %}{{ row.relevance_score }}/10{% else %}?{% endif %}</span>
           </div>
           <h3>{{ row.brief_summary }}</h3>
@@ -350,16 +361,15 @@
           <div class="meta-grid">
             <div>
               <strong>File:</strong>
-              {% if row.report_href %}
-              <a href="{{ row.report_href }}">{{ row.source_filename }}</a>
+              {% if row.document_anchor %}
+              <a href="#{{ row.document_anchor }}">{{ row.source_filename }}</a>
               {% else %}
               {{ row.source_filename }}
               {% endif %}
             </div>
-            <div><strong>Path:</strong> <span class="chips">{{ row.source_path }}</span></div>
-            {% if row.people %}<div><strong>People:</strong> {{ row.people | join("; ") }}</div>{% endif %}
-            {% if row.places %}<div><strong>Places:</strong> {{ row.places | join("; ") }}</div>{% endif %}
-            {% if row.dates %}<div><strong>Dates:</strong> {{ row.dates | join("; ") }}</div>{% endif %}
+            {% if row.people %}
+            <div><strong>People:</strong> {{ row.people | join("; ") }}</div>
+            {% endif %}
           </div>
           {% if row.document_summary %}
           <p class="document-summary"><strong>Document Summary:</strong> {{ row.document_summary }}</p>
@@ -373,32 +383,81 @@
     </section>
 
     <section>
-      <h2>Unanalyzed PDFs</h2>
-      {% if unanalyzed_rows %}
-      <div class="warn">
-        <ul class="status-list">
-          {% for row in unanalyzed_rows %}
-          <li><strong>{{ row.canonical_filename }}</strong> | {{ row.status or "not yet analyzed" }}{% if row.failure_type %} ({{ row.failure_type }}){% endif %}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
+      <h2>Responsive Documents</h2>
+      {% if responsive_documents_index %}
+      <table class="people-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Filename</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for document in responsive_documents_index %}
+          <tr id="{{ document.anchor }}">
+            <td class="disclosure-cell">
+              <button class="disclosure" type="button" data-toggle-target="doc-{{ document.anchor }}" aria-expanded="false" aria-controls="doc-{{ document.anchor }}">
+                <span class="triangle">▸</span>
+              </button>
+            </td>
+            <td>
+              {% if document.report_href %}
+              <a href="{{ document.report_href }}">{{ document.source_filename }}</a>
+              {% else %}
+              {{ document.source_filename }}
+              {% endif %}
+            </td>
+            <td>{{ document.document_summary }}</td>
+          </tr>
+          <tr id="doc-{{ document.anchor }}" hidden>
+            <td colspan="3">
+              <div class="mention-list">
+                {% for item in document.evidence_items %}
+                <div class="mention-line">
+                  <a href="#{{ item.anchor }}">{{ item.brief_summary }}</a>
+                  <span class="chips">(
+                    {% if item.page_href %}<a href="{{ item.page_href }}">{{ item.page_label }}</a>{% else %}{{ item.page_label }}{% endif %}
+                    {% if item.people %} | {{ item.people | join("; ") }}{% endif %}
+                  )</span>
+                </div>
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
           {% endfor %}
-        </ul>
-      </div>
+        </tbody>
+      </table>
       {% else %}
-      <p class="empty">All discovered PDFs for this project have stored successful analyses for the active query.</p>
+      <p class="empty">No responsive documents are currently available.</p>
       {% endif %}
     </section>
 
     <section>
-      <h2>Failures</h2>
+      <h2>Errors</h2>
+      {% if failure_rows or unanalyzed_rows %}
       {% if failure_rows %}
       <div class="danger">
+        <p><strong>{{ "{:,}".format(failure_rows|length) }}</strong> failure{% if failure_rows|length != 1 %}s{% endif %}</p>
         <ul class="status-list">
           {% for row in failure_rows %}
           <li><strong>{{ row.source_filename }}</strong> | {{ row.failure_type or row.status }}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
           {% endfor %}
         </ul>
       </div>
+      {% endif %}
+      {% if unanalyzed_rows %}
+      <div class="warn">
+        <p><strong>{{ "{:,}".format(unanalyzed_rows|length) }}</strong> unanalyzed</p>
+        <ul class="status-list">
+          {% for row in unanalyzed_rows %}
+          <li><strong>{{ row.canonical_filename }}</strong> | {{ row.status or "not yet analyzed" }}{% if row.failure_type %} ({{ row.failure_type }}){% endif %}{% if row.error_text %}: {{ row.error_text }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
       {% else %}
-      <p class="empty">No failed analyses are currently recorded for this query.</p>
+      <p class="empty">none</p>
       {% endif %}
     </section>
   </main>
