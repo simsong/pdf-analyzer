@@ -11,6 +11,7 @@ from .constants import (
     DEFAULT_SCHEMA_VERSION,
     DEFAULT_SYNTHESIS_PROMPT_VERSION,
 )
+from .name_clustering import SUPPORTED_NAME_CLUSTERING_METHODS
 from .utils import ensure_directory
 
 
@@ -26,6 +27,7 @@ class ProjectConfig(BaseModel):
     model: str = DEFAULT_MODEL
     workers: int | None = None
     oversize_strategy: str = DEFAULT_OVERSIZE_STRATEGY
+    name_clustering: str = "local"
     prompt_version: str = DEFAULT_PROMPT_VERSION
     schema_version: str = DEFAULT_SCHEMA_VERSION
     synthesis_prompt_version: str = DEFAULT_SYNTHESIS_PROMPT_VERSION
@@ -38,6 +40,11 @@ class ProjectConfig(BaseModel):
         if self.oversize_strategy not in allowed:
             raise ValueError(
                 f"oversize_strategy must be one of {sorted(allowed)}, got {self.oversize_strategy!r}"
+            )
+        if self.name_clustering not in SUPPORTED_NAME_CLUSTERING_METHODS:
+            raise ValueError(
+                "name_clustering must be one of "
+                f"{sorted(SUPPORTED_NAME_CLUSTERING_METHODS)}, got {self.name_clustering!r}"
             )
         return self
 

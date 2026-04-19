@@ -543,6 +543,7 @@ def main() -> int:
     db.set_metadata("project_name", config.name)
     db.set_metadata("pdf_directory", str(config.resolved_pdf_directory))
     db.set_metadata("question", config.question)
+    db.set_metadata("name_clustering", config.name_clustering)
     query_identity = build_query_identity(
         prompt_version=config.prompt_version,
         schema_version=config.schema_version,
@@ -834,6 +835,9 @@ def main() -> int:
                 output_dir=output_dir,
                 question=config.question,
                 project_name=config.name,
+                model_name=model_name,
+                name_clustering_method=config.name_clustering,
+                allow_gemini=not args.no_gemini,
                 run_summary=run_summary,
             )
             db.finalize_run(

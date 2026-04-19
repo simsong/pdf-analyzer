@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import SQLITE_JOURNAL_MODE, SQLITE_SYNCHRONOUS, SQLITE_TIMEOUT_SECONDS
+from .pricing import estimate_usage_cost
 
 
 class Database:
@@ -707,8 +708,6 @@ class Database:
         query_id: int,
         pricing_snapshot: dict[str, Any],
     ) -> None:
-        from .pricing import estimate_usage_cost
-
         conn = self.connection()
         document_rows = conn.execute(
             """

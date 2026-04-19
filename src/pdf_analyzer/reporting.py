@@ -1,6 +1,7 @@
 import re
 import shutil
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,8 +10,12 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .name_clustering import canonicalize_name_list, cluster_names, person_sort_key
+from .name_clustering_models import NameStringRecord
 from .pricing import PRICING_OBJECT_NAME
 from .utils import clone_or_copy_file, coerce_json_list, parse_sort_year, slugify, unique_copy_name
+
+LOGGER = logging.getLogger(__name__)
 
 _MONTH_NUMBERS = {
     "jan": 1,
@@ -229,16 +234,143 @@ def _evidence_sort_key(row: dict[str, Any]) -> tuple[tuple[int, int, int], int, 
     return (row["sort_key"], page, row["source_filename"].casefold(), row["summary"].casefold())
 
 
-def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
+def _build_name_string_records(
+    evidence_rows: list[dict[str, Any]],
+    document_rows: list[dict[str, Any]],
+    synthesis_payload: dict[str, Any] | None,
+) -> list[NameStringRecord]:
+    grouped: dict[str, dict[str, Any]] = {}
+
+    def ensure_bucket(name: str) -> dict[str, Any]:
+        return grouped.setdefault(
+            name,
+            {
+                "mentions": 0,
+                "source_filenames": set(),
+                "context_notes": [],
+                "contexts_seen": set(),
+                "mentions_for_period": [],
+            },
+        )
+
     for row in evidence_rows:
         seen_in_row: set[str] = set()
-        for person in row["people"]:
-            cleaned = person.strip()
+        for raw_name in row["raw_people"]:
+            cleaned = raw_name.strip()
             if not cleaned or cleaned in seen_in_row:
                 continue
             seen_in_row.add(cleaned)
-            grouped.setdefault(cleaned, []).append(
+            bucket = ensure_bucket(cleaned)
+            bucket["mentions"] += 1
+            if row.get("source_filename"):
+                bucket["source_filenames"].add(row["source_filename"])
+            context_note = row.get("brief_summary") or row.get("summary") or ""
+            if context_note and context_note not in bucket["contexts_seen"]:
+                bucket["contexts_seen"].add(context_note)
+                if len(bucket["context_notes"]) < 5:
+                    bucket["context_notes"].append(context_note)
+            bucket["mentions_for_period"].append(
+                {
+                    "sort_key": row["sort_key"],
+                    "date_label": row["date_label"],
+                }
+            )
+
+    for row in document_rows:
+        if row.get("responsive") != 1:
+            continue
+        for raw_name in coerce_json_list(row.get("people_json")):
+            cleaned = raw_name.strip()
+            if not cleaned:
+                continue
+            bucket = ensure_bucket(cleaned)
+            if row.get("canonical_filename"):
+                bucket["source_filenames"].add(row["canonical_filename"])
+            context_note = row.get("summary") or ""
+            if context_note and context_note not in bucket["contexts_seen"]:
+                bucket["contexts_seen"].add(context_note)
+                if len(bucket["context_notes"]) < 5:
+                    bucket["context_notes"].append(context_note)
+
+    if synthesis_payload is not None:
+        for raw_name in synthesis_payload.get("people", []):
+            cleaned = raw_name.strip()
+            if not cleaned:
+                continue
+            bucket = ensure_bucket(cleaned)
+            context_note = synthesis_payload.get("answer") or ""
+            if context_note and context_note not in bucket["contexts_seen"]:
+                bucket["contexts_seen"].add(context_note)
+                if len(bucket["context_notes"]) < 5:
+                    bucket["context_notes"].append(context_note)
+
+    records: list[NameStringRecord] = []
+    for index, name in enumerate(sorted(grouped, key=str.casefold), start=1):
+        bucket = grouped[name]
+        mentions_for_period = sorted(
+            bucket["mentions_for_period"],
+            key=lambda mention: (mention["sort_key"], mention["date_label"].casefold()),
+        )
+        time_period = _format_time_period(mentions_for_period) if mentions_for_period else None
+        records.append(
+            NameStringRecord(
+                id=index,
+                name_string=name,
+                mentions=int(bucket["mentions"]),
+                time_period=time_period,
+                source_filenames=tuple(sorted(bucket["source_filenames"], key=str.casefold)),
+                context_notes=tuple(bucket["context_notes"]),
+            )
+        )
+    return records
+
+
+def _build_authoritative_name_mapping(
+    *,
+    evidence_rows: list[dict[str, Any]],
+    document_rows: list[dict[str, Any]],
+    synthesis_payload: dict[str, Any] | None,
+    name_clustering_method: str,
+    model_name: str,
+    allow_gemini: bool,
+) -> dict[str, str]:
+    records = _build_name_string_records(evidence_rows, document_rows, synthesis_payload)
+    if not records:
+        return {}
+    clustering_result = cluster_names(
+        records,
+        method=name_clustering_method,
+        model_name=model_name,
+        allow_gemini=allow_gemini,
+    )
+    record_name_by_id = {record.id: record.name_string for record in records}
+    canonical_by_raw: dict[str, str] = {}
+    for cluster in clustering_result.clusters:
+        for member_id in cluster.member_name_ids:
+            canonical_by_raw[record_name_by_id[member_id]] = cluster.representative_name
+    LOGGER.info(
+        "Applied %s name clustering across %s unique extracted name strings, producing %s authoritative names.",
+        clustering_result.method,
+        len(records),
+        len(clustering_result.clusters),
+    )
+    return canonical_by_raw
+
+
+def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in evidence_rows:
+        matched_names_by_person: dict[str, list[str]] = {}
+        for raw_person in row["raw_people"]:
+            cleaned = raw_person.strip()
+            if not cleaned:
+                continue
+            canonical_person = row["canonical_name_by_raw"].get(cleaned, cleaned)
+            matched_names = matched_names_by_person.setdefault(canonical_person, [])
+            if cleaned not in matched_names:
+                matched_names.append(cleaned)
+        for canonical_person, matched_names in matched_names_by_person.items():
+            grouped.setdefault(canonical_person, []).append(
                 {
                     "anchor": row["anchor"],
                     "date_label": row["date_label"],
@@ -250,6 +382,7 @@ def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, A
                     "page_label": row["page_label"],
                     "page_href": _pdf_page_href(row.get("report_href"), row["page_start"]),
                     "people": row["people"],
+                    "matched_names": matched_names,
                 }
             )
 
@@ -275,7 +408,7 @@ def _build_people_index(evidence_rows: list[dict[str, Any]]) -> list[dict[str, A
             }
         )
 
-    people_index.sort(key=lambda row: (-row["mention_count"], row["person"].casefold()))
+    people_index.sort(key=lambda row: person_sort_key(row["person"]))
     return people_index
 
 
@@ -300,6 +433,7 @@ def _build_responsive_documents_index(
                 "document_sha256": document_row["sha256"],
                 "anchor": f"document-{slugify(document_row['canonical_filename'])}-{document_row['sha256'][:8]}",
                 "source_filename": document_row["canonical_filename"],
+                "page_count": int(document_row.get("stored_page_count") or 0),
                 "document_summary": document_row.get("summary") or "",
                 "report_href": evidence_items[0].get("report_href"),
                 "evidence_items": [
@@ -325,6 +459,9 @@ def generate_reports(
     output_dir: Path,
     question: str,
     project_name: str,
+    model_name: str,
+    name_clustering_method: str,
+    allow_gemini: bool,
     run_summary: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -367,7 +504,7 @@ def generate_reports(
     evidence_rows: list[dict[str, Any]] = []
     for row in evidence_rows_raw:
         dates = coerce_json_list(row["dates_json"])
-        people = coerce_json_list(row["people_json"])
+        raw_people = coerce_json_list(row["people_json"])
         places = coerce_json_list(row["places_json"])
         sort_key, date_label, date_badge_label = _best_date_metadata(
             dates,
@@ -385,7 +522,8 @@ def generate_reports(
                 "page_label": _page_label(row["page_start"], row["page_end"]),
                 "summary": row["evidence_summary"],
                 "brief_summary": _truncate_text(row["evidence_summary"] or row["document_summary"] or ""),
-                "people": people,
+                "raw_people": raw_people,
+                "people": raw_people,
                 "places": places,
                 "dates": dates,
                 "date_label": date_label,
@@ -402,18 +540,6 @@ def generate_reports(
             }
         )
     evidence_rows.sort(key=_evidence_sort_key)
-    for index, row in enumerate(evidence_rows, start=1):
-        row["anchor"] = f"evidence-{index}"
-        row["key_person"] = _key_person_for_row(row)
-    responsive_documents_index = _build_responsive_documents_index(document_rows, evidence_rows)
-    document_anchor_map = {
-        row["document_sha256"]: row["anchor"] for row in responsive_documents_index
-    }
-    for row in evidence_rows:
-        row["document_anchor"] = document_anchor_map.get(row["document_sha256"], "")
-
-    people_index = _build_people_index(evidence_rows)
-    unanalyzed_rows = [row for row in document_rows if row.get("status") != "succeeded"]
 
     synthesis_payload = None
     if synthesis_row is not None and synthesis_row["status"] == "succeeded":
@@ -425,6 +551,44 @@ def generate_reports(
             "dates": coerce_json_list(synthesis_row["dates_json"]),
             "reasoning_notes": synthesis_row["reasoning_notes"],
         }
+
+    authoritative_name_by_raw = _build_authoritative_name_mapping(
+        evidence_rows=evidence_rows,
+        document_rows=document_rows,
+        synthesis_payload=synthesis_payload,
+        name_clustering_method=name_clustering_method,
+        model_name=model_name,
+        allow_gemini=allow_gemini,
+    )
+    for row in evidence_rows:
+        row["canonical_name_by_raw"] = authoritative_name_by_raw
+        row["people"] = canonicalize_name_list(row["raw_people"], authoritative_name_by_raw)
+    for index, row in enumerate(evidence_rows, start=1):
+        row["anchor"] = f"evidence-{index}"
+        row["key_person"] = _key_person_for_row(row)
+    responsive_documents_index = _build_responsive_documents_index(document_rows, evidence_rows)
+    document_anchor_map = {
+        row["document_sha256"]: row["anchor"] for row in responsive_documents_index
+    }
+    for row in evidence_rows:
+        row["document_anchor"] = document_anchor_map.get(row["document_sha256"], "")
+
+    for row in document_rows:
+        row["people"] = canonicalize_name_list(
+            coerce_json_list(row.get("people_json")),
+            authoritative_name_by_raw,
+        )
+        row["places"] = coerce_json_list(row.get("places_json"))
+        row["dates"] = coerce_json_list(row.get("dates_json"))
+
+    if synthesis_payload is not None:
+        synthesis_payload["people"] = canonicalize_name_list(
+            synthesis_payload["people"],
+            authoritative_name_by_raw,
+        )
+
+    people_index = _build_people_index(evidence_rows)
+    unanalyzed_rows = [row for row in document_rows if row.get("status") != "succeeded"]
 
     total_pages_scanned = (
         int(run_summary["scanned_pages"])
@@ -543,9 +707,9 @@ def generate_reports(
                 _safe_excel(row.get("responsive")),
                 _safe_excel(row.get("relevance_score")),
                 _safe_excel(row.get("summary")),
-                _safe_excel(_safe_display_list(coerce_json_list(row.get("people_json")))),
-                _safe_excel(_safe_display_list(coerce_json_list(row.get("places_json")))),
-                _safe_excel(_safe_display_list(coerce_json_list(row.get("dates_json")))),
+                _safe_excel(_safe_display_list(row.get("people", []))),
+                _safe_excel(_safe_display_list(row.get("places", []))),
+                _safe_excel(_safe_display_list(row.get("dates", []))),
                 _safe_excel(row.get("evidence_count")),
                 _safe_excel(row.get("failure_type")),
                 _safe_excel(row.get("error_text")),

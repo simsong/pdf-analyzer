@@ -32,9 +32,10 @@ name: Example Archive
 pdf_directory: ./pdfs
 output_directory: ./example-output
 question: What does this archive say about bridge safety?
+name_clustering: local
 ```
 
-Optional overrides such as `model`, `workers`, and `oversize_strategy` are also supported.
+Optional overrides such as `model`, `workers`, `oversize_strategy`, and `name_clustering` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
 
 ## Outputs
 
@@ -48,12 +49,28 @@ Each project run writes durable artifacts into `output_directory`:
 
 Intermediate prepared PDFs are written to a temporary directory for the duration of the run and are not kept afterward.
 
+## Report Sections
+
+`report.html` includes these sections:
+
+- `Run Summary`: document count, scanned pages, responsive-PDF count, evidence-row count, error summary, and cached token/cost totals when pricing is available.
+- `Project Answer`: project-level synthesis answer plus key findings and extracted people, places, and dates.
+- `Responsive Index`: a concise chronological table of contents linking into the detailed evidence cards.
+- `People`: authoritative clustered names, sorted by last name, with expandable mention rows that show the matched extracted name variant for each evidence row.
+- `Responsive Evidence Timeline`: chronological evidence cards with date pill, key person, page or page-range links, canonical people, and links back to responsive documents.
+- `Responsive Documents`: one row per responsive PDF, with expandable evidence rows showing pages and authoritative names.
+- `Errors`: failures plus unanalyzed documents when any exist.
+
 ## Repository Layout
 
 - `src/pdf_analyzer/`
   Supported archive-analysis package.
 - `doc/theory-of-operation.md`
-  Current architecture, data flow, and report pipeline for `pdf_analyzer`.
+  Overall architecture, data flow, and report pipeline for `pdf_analyzer`.
+- `doc/fact-extraction.md`
+  Focused note on document analysis, synthesis, and report data flow.
+- `doc/name-matching.md`
+  Focused note on authoritative-name clustering, current options, and alternative approaches.
 
 ## Notes
 

@@ -11,6 +11,11 @@ The system is optimized for:
 3. traceability of model calls, failures, and costs
 4. per-document evidence extraction followed by project-level synthesis
 
+For focused details, see:
+
+- [doc/fact-extraction.md](/Users/simsong/gits/sabinok-pdf/doc/fact-extraction.md)
+- [doc/name-matching.md](/Users/simsong/gits/sabinok-pdf/doc/name-matching.md)
+
 ## Configuration
 
 Each project is defined by one YAML file with:
@@ -25,6 +30,7 @@ Optional fields include:
 - `model`
 - `workers`
 - `oversize_strategy`
+- `name_clustering`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
@@ -154,13 +160,20 @@ Each responsive document entry includes:
 
 The HTML report is operator-facing and emphasizes fast review:
 
-- run summary
-- responsive index ordered chronologically
-- people table with expandable mentions
-- project answer
-- detailed responsive evidence
-- unanalyzed PDFs
-- failures
+- `Run Summary`
+  Includes total documents, total scanned pages, responsive-PDF count, responsive evidence-row count, consolidated error label, and cached token/cost totals when a pricing snapshot is available.
+- `Project Answer`
+  Shows the stored project-level synthesis answer, key findings, and extracted people, places, and dates.
+- `Responsive Index`
+  Acts as a chronological table of contents over responsive evidence rows using the earliest detected date for each row.
+- `People`
+  Uses configurable name clustering to produce authoritative names. The default `local` strategy applies rule-based clustering; `gemini` sends the extracted name strings plus lightweight context to Gemini. The table is sorted by last name, and each disclosure row shows the exact matched extracted name form for each mention.
+- `Responsive Evidence Timeline`
+  Displays one card per responsive evidence row, ordered chronologically, with date pill, key-person pill, page or page-range link into the copied PDF, canonical people list, and a link to the responsive-document entry.
+- `Responsive Documents`
+  Lists only responsive PDFs copied into `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names.
+- `Errors`
+  Combines failures and unanalyzed PDFs in one operator-facing section while still distinguishing the two categories.
 
 The XLSX report contains tabular exports for:
 

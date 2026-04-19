@@ -301,6 +301,7 @@
 
     <section>
       <h2>People</h2>
+      <p class="meta">Authoritative names are clustered automatically and sorted by last name. Expand a row to see each matching extracted form in context.</p>
       {% if people_index %}
       <table class="people-table">
         <thead>
@@ -329,7 +330,7 @@
                 {% for mention in person.mentions %}
                 <div class="mention-line">
                   <a href="#{{ mention.anchor }}">{{ mention.date_badge_label }}</a> | {{ mention.brief_summary }}
-                  <span class="chips">({{ mention.source_filename }}{% if mention.page_label %}, {% if mention.page_href %}<a href="{{ mention.page_href }}" target="_blank" rel="noopener noreferrer">{{ mention.page_label }}</a>{% else %}{{ mention.page_label }}{% endif %}{% endif %})</span>
+                  <span class="chips">({{ mention.source_filename }}{% if mention.page_label %}, {% if mention.page_href %}<a href="{{ mention.page_href }}" target="_blank" rel="noopener noreferrer">{{ mention.page_label }}</a>{% else %}{{ mention.page_label }}{% endif %}{% endif %}; matched as {{ mention.matched_names | join("; ") }})</span>
                 </div>
                 {% endfor %}
               </div>
@@ -387,6 +388,7 @@
           <tr>
             <th></th>
             <th>Filename</th>
+            <th>Pages</th>
             <th>Summary</th>
           </tr>
         </thead>
@@ -405,10 +407,11 @@
               {{ document.source_filename }}
               {% endif %}
             </td>
+            <td>{{ "{:,}".format(document.page_count) }}</td>
             <td>{{ document.document_summary }}</td>
           </tr>
           <tr id="doc-{{ document.anchor }}" hidden>
-            <td colspan="3">
+            <td colspan="4">
               <div class="mention-list">
                 {% for item in document.evidence_items %}
                 <div class="mention-line">
