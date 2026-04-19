@@ -1,6 +1,7 @@
 import sys
 from types import SimpleNamespace
 
+from pdf_analyzer.exceptions import PricingSnapshotError
 from pdf_analyzer.main import main
 
 
@@ -22,10 +23,13 @@ def test_list_models_prints_available_models_and_prices(monkeypatch, capsys) -> 
         def __init__(self) -> None:
             self.models = SimpleNamespace(list=lambda: fake_models)
 
-    monkeypatch.setattr("pdf_analyzer.main.build_client", lambda: FakeClient())
+    def fake_build_client():
+        return FakeClient()
+
+    monkeypatch.setattr("pdf_analyzer.main.build_client", fake_build_client)
     monkeypatch.setattr(
         "pdf_analyzer.main.fetch_pricing_snapshot",
-        lambda: (
+        lambda *, client, model_name: (
             {
                 "models": {
                     "gemini-2.5-flash": {
@@ -54,3 +58,31 @@ def test_list_models_prints_available_models_and_prices(monkeypatch, capsys) -> 
     assert "custom-experimental-model" in output
     assert "1,048,576" in output
     assert "65,536" in output
+
+
+def test_list_models_fails_when_pricing_refresh_fails(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.models = SimpleNamespace(list=lambda: [])
+
+        def close(self) -> None:
+            return None
+
+    def fake_build_client():
+        return FakeClient()
+
+    monkeypatch.setattr("pdf_analyzer.main.build_client", fake_build_client)
+    monkeypatch.setattr(
+        "pdf_analyzer.main.fetch_pricing_snapshot",
+        lambda *, client, model_name: (_ for _ in ()).throw(
+            PricingSnapshotError("pricing unavailable")
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["analyze", "--list-models"])
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert str(exc) == "ERROR: Could not refresh Gemini pricing snapshot: pricing unavailable"
+    else:
+        raise AssertionError("Expected SystemExit")

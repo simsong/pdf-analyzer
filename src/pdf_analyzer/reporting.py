@@ -1,11 +1,13 @@
 import re
 import shutil
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.worksheet.worksheet import Worksheet
 
 from .pricing import PRICING_OBJECT_NAME
 from .utils import clone_or_copy_file, coerce_json_list, parse_sort_year, slugify, unique_copy_name
@@ -335,8 +337,13 @@ def generate_reports(
     evidence_rows_raw = [dict(row) for row in db.report_evidence_rows(query_id)]
     failure_rows = [dict(row) for row in db.report_failure_rows(query_id)]
     synthesis_row = db.fetch_synthesis(query_id)
-    usage_summary = db.calculate_query_usage_summary(query_id)
     pricing_snapshot_row = db.fetch_latest_object(PRICING_OBJECT_NAME)
+    if pricing_snapshot_row is not None:
+        db.backfill_missing_usage_costs(
+            query_id=query_id,
+            pricing_snapshot=json.loads(pricing_snapshot_row["json_object"]),
+        )
+    usage_summary = db.calculate_query_usage_summary(query_id)
 
     responsive_sha256s = {row["document_sha256"] for row in evidence_rows_raw}
     responsive_sha256s.update(row["sha256"] for row in document_rows if row.get("responsive") == 1)
@@ -469,6 +476,8 @@ def generate_reports(
 
     workbook = Workbook()
     evidence_sheet = workbook.active
+    assert evidence_sheet is not None
+    evidence_sheet = cast(Worksheet, evidence_sheet)
     evidence_sheet.title = "Evidence"
     evidence_sheet.append(
         [

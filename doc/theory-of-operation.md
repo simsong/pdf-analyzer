@@ -30,6 +30,7 @@ Optional fields include:
 - `synthesis_prompt_version`
 
 One YAML file corresponds to one SQLite database and one output directory.
+The configured version strings are still supported, but the analyzer also computes automatic prompt/schema fingerprints so cache invalidation follows actual structural changes.
 
 ## Durable State
 
@@ -101,11 +102,11 @@ The active query is keyed by:
 - question text
 - normalized question text
 - model name
-- prompt version
-- schema version
-- synthesis prompt version
+- effective prompt version
+- effective schema version
+- effective synthesis prompt version
 
-That allows prompt/schema evolution without overwriting older runs that were produced under different assumptions.
+Each effective version combines the configured version string with a fingerprint of the actual prompt template or Pydantic JSON schema in use. That allows prompt/schema evolution without overwriting older runs that were produced under different assumptions, even when the YAML version strings were not manually bumped.
 
 ## Oversized PDFs
 

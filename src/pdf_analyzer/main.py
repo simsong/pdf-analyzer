@@ -3,12 +3,13 @@ import concurrent.futures
 import json
 import logging
 import shutil
-import sys
 import tempfile
 import time
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
+from .cache_identity import build_query_identity
 from .config import ProjectConfig
 from .constants import (
     DEFAULT_DATABASE_NAME,
@@ -17,6 +18,13 @@ from .constants import (
     DEFAULT_WORKERS,
 )
 from .db import Database
+from .exceptions import (
+    DocumentAnalysisError,
+    PreparationError,
+    PricingSnapshotError,
+    ProjectSynthesisError,
+    UploadCandidateError,
+)
 from .gemini import (
     analyze_document_with_files,
     build_client,
@@ -71,41 +79,49 @@ def _format_limit(value: Any) -> str:
 
 def list_models_with_pricing() -> None:
     client = build_client()
-    pricing_snapshot: dict[str, Any] | None = None
     try:
-        pricing_snapshot, _ = fetch_pricing_snapshot()
-    except Exception as exc:
-        LOGGER.warning("Could not fetch Gemini pricing snapshot: %s", exc)
-    all_models = sorted(
-        list(client.models.list()),
-        key=lambda model: getattr(model, "name", ""),
-    )
-    print(
-        f"{'MODEL ID':<40} | {'INPUT $/1M':<10} | {'OUTPUT $/1M':<11} | "
-        f"{'INPUT LIMIT':<12} | {'OUTPUT LIMIT':<12}"
-    )
-    print("-" * 97)
-    for model in all_models:
-        raw_name = getattr(model, "name", "Unknown")
-        model_name = raw_name.replace("models/", "")
-        try:
-            pricing = get_model_pricing(pricing_snapshot or {}, model_name)
-            input_price = pricing.input_usd_per_million_tokens
-            output_price = pricing.output_usd_per_million_tokens
-        except ValueError:
-            input_price = None
-            output_price = None
-        print(
-            f"{model_name:<40} | {_format_price(input_price):<10} | "
-            f"{_format_price(output_price):<11} | "
-            f"{_format_limit(getattr(model, 'input_token_limit', None)):<12} | "
-            f"{_format_limit(getattr(model, 'output_token_limit', None)):<12}"
+        pricing_snapshot, _ = fetch_pricing_snapshot(
+            client=client,
+            model_name=DEFAULT_MODEL,
         )
+        all_models = sorted(
+            list(client.models.list()),
+            key=lambda model: getattr(model, "name", ""),
+        )
+        print(
+            f"{'MODEL ID':<40} | {'INPUT $/1M':<10} | {'OUTPUT $/1M':<11} | "
+            f"{'INPUT LIMIT':<12} | {'OUTPUT LIMIT':<12}"
+        )
+        print("-" * 97)
+        for model in all_models:
+            raw_name = getattr(model, "name", "Unknown")
+            model_name = raw_name.replace("models/", "")
+            try:
+                pricing = get_model_pricing(pricing_snapshot or {}, model_name)
+                input_price = pricing.input_usd_per_million_tokens
+                output_price = pricing.output_usd_per_million_tokens
+            except ValueError:
+                input_price = None
+                output_price = None
+            print(
+                f"{model_name:<40} | {_format_price(input_price):<10} | "
+                f"{_format_price(output_price):<11} | "
+                f"{_format_limit(getattr(model, 'input_token_limit', None)):<12} | "
+                f"{_format_limit(getattr(model, 'output_token_limit', None)):<12}"
+            )
+    except PricingSnapshotError as exc:
+        raise SystemExit(f"ERROR: Could not refresh Gemini pricing snapshot: {exc}") from exc
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
 
 
 def maybe_store_pricing_snapshot(
     *,
     db: Database,
+    client: Any | None = None,
+    model_name: str | None = None,
     refresh: bool,
 ) -> dict[str, Any] | None:
     latest = db.fetch_latest_object(PRICING_OBJECT_NAME)
@@ -114,25 +130,31 @@ def maybe_store_pricing_snapshot(
             return None
         return json.loads(latest["json_object"])
 
-    try:
-        payload, metadata = fetch_pricing_snapshot()
-        db.insert_object(
-            object_name=PRICING_OBJECT_NAME,
-            stored_at=utc_now_iso(),
-            source_url=metadata["source_url"],
-            fetched_by=DEFAULT_PRICING_FETCHER,
-            json_object=payload,
-            content_sha256=metadata.get("content_sha256"),
-            content_type=metadata.get("content_type"),
-            source_etag=metadata.get("source_etag"),
-            source_last_modified=metadata.get("source_last_modified"),
+    if client is None or not model_name:
+        raise SystemExit(
+            "ERROR: Gemini pricing refresh requires both a Gemini client and model name."
         )
-        return payload
-    except Exception as exc:
-        LOGGER.warning("Could not refresh Gemini pricing snapshot: %s", exc)
-        if latest is None:
-            return None
-        return json.loads(latest["json_object"])
+
+    try:
+        payload, metadata = fetch_pricing_snapshot(
+            client=client,
+            model_name=model_name,
+        )
+    except PricingSnapshotError as exc:
+        raise SystemExit(f"ERROR: Could not refresh Gemini pricing snapshot: {exc}") from exc
+
+    db.insert_object(
+        object_name=PRICING_OBJECT_NAME,
+        stored_at=utc_now_iso(),
+        source_url=metadata["source_url"],
+        fetched_by=DEFAULT_PRICING_FETCHER,
+        json_object=payload,
+        content_sha256=metadata.get("content_sha256"),
+        content_type=metadata.get("content_type"),
+        source_etag=metadata.get("source_etag"),
+        source_last_modified=metadata.get("source_last_modified"),
+    )
+    return payload
 
 
 def configure_logging(verbose: bool) -> None:
@@ -157,7 +179,7 @@ def scan_archive(db: Database, config: ProjectConfig) -> list[dict[str, Any]]:
         try:
             sha256, _, size_bytes = file_hashes(pdf_path)
             inspector = PDFInspector(pdf_path)
-        except Exception as exc:
+        except OSError as exc:
             LOGGER.warning("Skipping unreadable PDF %s: %s", pdf_path, exc)
             continue
         relative_path = str(pdf_path.relative_to(config.resolved_pdf_directory))
@@ -235,7 +257,7 @@ def process_document_task(
             work_dir=prepared_dir,
             oversize_strategy=oversize_strategy,
         )
-    except Exception as exc:
+    except PreparationError as exc:
         db.upsert_document_analysis(
             {
                 "query_id": query_id,
@@ -288,7 +310,7 @@ def process_document_task(
                     candidate=candidate,
                 )
             )
-    except Exception as exc:
+    except UploadCandidateError as exc:
         db.upsert_document_analysis(
             {
                 "query_id": query_id,
@@ -320,7 +342,10 @@ def process_document_task(
             uploaded_files=uploaded_files,
         )
         usage_fields = usage_to_cost_fields(pricing_snapshot, model_name, response.usage_metadata)
-        raw_response = json.loads(response.text)
+        response_text = response.text
+        if response_text is None:
+            raise DocumentAnalysisError("Gemini returned an empty document-analysis response.")
+        raw_response = json.loads(response_text)
         db.insert_gemini_call_log(
             {
                 "run_id": run_id,
@@ -375,7 +400,7 @@ def process_document_task(
         )
         db.close()
         return {"status": "succeeded", "responsive": result.responsive}
-    except Exception as exc:
+    except (DocumentAnalysisError, JSONDecodeError) as exc:
         db.insert_gemini_call_log(
             {
                 "run_id": run_id,
@@ -518,14 +543,41 @@ def main() -> int:
     db.set_metadata("project_name", config.name)
     db.set_metadata("pdf_directory", str(config.resolved_pdf_directory))
     db.set_metadata("question", config.question)
+    query_identity = build_query_identity(
+        prompt_version=config.prompt_version,
+        schema_version=config.schema_version,
+        synthesis_prompt_version=config.synthesis_prompt_version,
+    )
+    db.set_metadata("configured_prompt_version", query_identity["configured_prompt_version"])
+    db.set_metadata("configured_schema_version", query_identity["configured_schema_version"])
+    db.set_metadata(
+        "configured_synthesis_prompt_version",
+        query_identity["configured_synthesis_prompt_version"],
+    )
+    db.set_metadata(
+        "document_prompt_fingerprint",
+        query_identity["document_prompt_fingerprint"],
+    )
+    db.set_metadata(
+        "document_schema_fingerprint",
+        query_identity["document_schema_fingerprint"],
+    )
+    db.set_metadata(
+        "synthesis_prompt_fingerprint",
+        query_identity["synthesis_prompt_fingerprint"],
+    )
+    db.set_metadata(
+        "synthesis_schema_fingerprint",
+        query_identity["synthesis_schema_fingerprint"],
+    )
 
     query_id = db.get_or_create_query(
         question=config.question,
         normalized_question=normalize_question(config.question),
         model_name=model_name,
-        prompt_version=config.prompt_version,
-        schema_version=config.schema_version,
-        synthesis_prompt_version=config.synthesis_prompt_version,
+        prompt_version=query_identity["effective_prompt_version"],
+        schema_version=query_identity["effective_schema_version"],
+        synthesis_prompt_version=query_identity["effective_synthesis_prompt_version"],
         now_iso=utc_now_iso(),
     )
     run_id = db.start_run(
@@ -579,7 +631,18 @@ def main() -> int:
                         len(pending_documents) - skipped_documents,
                     )
             elif pending_documents:
-                pricing_snapshot = maybe_store_pricing_snapshot(db=db, refresh=True)
+                pricing_client = build_client()
+                try:
+                    pricing_snapshot = maybe_store_pricing_snapshot(
+                        db=db,
+                        client=pricing_client,
+                        model_name=model_name,
+                        refresh=True,
+                    )
+                finally:
+                    close = getattr(pricing_client, "close", None)
+                    if callable(close):
+                        close()
                 total_pending = len(pending_documents)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                     futures = [
@@ -624,7 +687,18 @@ def main() -> int:
                 existing_synthesis=existing_synthesis,
             ):
                 if pricing_snapshot is None:
-                    pricing_snapshot = maybe_store_pricing_snapshot(db=db, refresh=True)
+                    pricing_client = build_client()
+                    try:
+                        pricing_snapshot = maybe_store_pricing_snapshot(
+                            db=db,
+                            client=pricing_client,
+                            model_name=model_name,
+                            refresh=True,
+                        )
+                    finally:
+                        close = getattr(pricing_client, "close", None)
+                        if callable(close):
+                            close()
                 responsive_documents, successful_documents = build_synthesis_documents(db, query_id)
                 synthesis_started = utc_now_iso()
                 if successful_documents == 0:
@@ -670,7 +744,10 @@ def main() -> int:
                             responsive_documents=responsive_documents,
                         )
                         usage_fields = usage_to_cost_fields(pricing_snapshot, model_name, response.usage_metadata)
-                        raw_response = json.loads(response.text)
+                        response_text = response.text
+                        if response_text is None:
+                            raise ProjectSynthesisError("Gemini returned an empty project-synthesis response.")
+                        raw_response = json.loads(response_text)
                         db.insert_gemini_call_log(
                             {
                                 "run_id": run_id,
@@ -708,7 +785,7 @@ def main() -> int:
                                 **usage_fields,
                             }
                         )
-                    except Exception as exc:
+                    except (ProjectSynthesisError, JSONDecodeError) as exc:
                         db.insert_gemini_call_log(
                             {
                                 "run_id": run_id,

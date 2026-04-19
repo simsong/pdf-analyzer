@@ -100,7 +100,7 @@ def clone_or_copy_file(source: Path, target: Path) -> None:
         )
         apply_current_umask_file_mode(target)
         return
-    except Exception:
+    except (subprocess.CalledProcessError, OSError):
         shutil.copyfile(source, target)
     apply_current_umask_file_mode(target)
 
@@ -112,7 +112,7 @@ def coerce_json_list(value: Any) -> list[str]:
         return [str(item) for item in value if item]
     try:
         payload = json.loads(value)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return []
     if isinstance(payload, list):
         return [str(item) for item in payload if item]

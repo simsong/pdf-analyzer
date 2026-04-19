@@ -60,3 +60,4 @@ Intermediate prepared PDFs are written to a temporary directory for the duration
 - `uv run analyze ...` is the preferred CLI.
 - `uv run pdf-analyzer ...` remains as a compatibility alias.
 - A successful rerun with no new work reuses cached per-document analyses and cached project synthesis, then re-renders the reports.
+- Cache reuse is keyed by the configured versions plus automatic prompt/schema fingerprints, so structural model-output changes invalidate old cached analyses even if you forget to bump YAML version strings.

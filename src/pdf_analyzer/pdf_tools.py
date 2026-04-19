@@ -1,5 +1,4 @@
 import logging
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -8,8 +7,10 @@ from math import sqrt
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PyPdfError
 from pypdf.generic import ContentStream
 
+from .exceptions import PreparationError
 from .models import PreparedCandidate
 from .utils import apply_current_umask_file_mode, file_hashes
 
@@ -91,7 +92,7 @@ class PDFInspector:
     def reader(self) -> PdfReader | None:
         try:
             return PdfReader(str(self.pdf_path))
-        except Exception as exc:
+        except (OSError, PyPdfError) as exc:
             logger.warning("Could not inspect %s with pypdf: %s", self.pdf_path, exc)
             return None
 
@@ -175,7 +176,7 @@ class PDFInspector:
 
         try:
             content_stream = ContentStream(content_source, self.reader)
-        except Exception as exc:
+        except PyPdfError as exc:
             logger.warning(
                 "Could not parse content stream for %s page %s: %s",
                 self.pdf_path,
@@ -274,9 +275,11 @@ class PDFInspector:
         xobject_ref = resources.get("/XObject") if resources else None
         if not xobject_ref:
             return {}
+        if isinstance(xobject_ref, dict):
+            return dict(xobject_ref.items())
         try:
             xobject_dict = xobject_ref.get_object()
-        except Exception:
+        except PyPdfError:
             return {}
         return dict(xobject_dict.items())
 
@@ -623,28 +626,31 @@ def prepare_candidates_for_upload(
     oversize_strategy: str,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
 ) -> tuple[PDFInspector, list[PreparedCandidate]]:
-    source_pdf = ensure_pdf_exists(source_pdf)
-    inspector = PDFInspector(source_pdf)
-    candidates = choose_pdf_candidates(
-        source_pdf,
-        inspector,
-        output_dir=work_dir,
-        chunk_prefix=document_sha256,
-        oversize_strategy=oversize_strategy,
-        jpeg_quality=jpeg_quality,
-    )
-    prepared: list[PreparedCandidate] = []
-    for candidate in candidates:
-        candidate_sha256, _, _ = file_hashes(candidate.path)
-        prepared.append(
-            PreparedCandidate(
-                document_sha256=document_sha256,
-                candidate_sha256=candidate_sha256,
-                path=candidate.path,
-                size_bytes=candidate.size_bytes,
-                method=candidate.method,
-                start_page=candidate.start_page,
-                end_page=candidate.end_page,
-            )
+    try:
+        source_pdf = ensure_pdf_exists(source_pdf)
+        inspector = PDFInspector(source_pdf)
+        candidates = choose_pdf_candidates(
+            source_pdf,
+            inspector,
+            output_dir=work_dir,
+            chunk_prefix=document_sha256,
+            oversize_strategy=oversize_strategy,
+            jpeg_quality=jpeg_quality,
         )
-    return inspector, prepared
+        prepared: list[PreparedCandidate] = []
+        for candidate in candidates:
+            candidate_sha256, _, _ = file_hashes(candidate.path)
+            prepared.append(
+                PreparedCandidate(
+                    document_sha256=document_sha256,
+                    candidate_sha256=candidate_sha256,
+                    path=candidate.path,
+                    size_bytes=candidate.size_bytes,
+                    method=candidate.method,
+                    start_page=candidate.start_page,
+                    end_page=candidate.end_page,
+                )
+            )
+        return inspector, prepared
+    except (OSError, ValueError, PyPdfError) as exc:
+        raise PreparationError(str(exc)) from exc

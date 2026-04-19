@@ -3,19 +3,51 @@ import logging
 import os
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from google import genai
 from google.genai import errors, types
 from google.genai.types import File, GenerateContentResponseUsageMetadata
+from pydantic import ValidationError
 
-from .constants import DEFAULT_MODEL, GEMINI_FILE_TTL_HOURS
+from .constants import GEMINI_FILE_TTL_HOURS
+from .exceptions import (
+    DocumentAnalysisError,
+    ProjectSynthesisError,
+    UploadCandidateError,
+)
 from .models import DocumentAnalysisResult, PreparedCandidate, ProjectSynthesisResult
 from .pricing import estimate_usage_cost
 from .utils import utc_now_iso
 
 LOGGER = logging.getLogger(__name__)
+
+DOCUMENT_PROMPT_INSTRUCTIONS = [
+    "You are a precise archival researcher helping a journalist answer a question from a PDF archive.",
+    "Return only structured JSON matching the provided schema.",
+    "Do not quote the PDF directly. Paraphrase the responsive material.",
+    "If the document is not responsive, set responsive=false, keep the score low, and leave evidence_items empty.",
+    "Use original document page numbers. Each evidence item must describe one responsive page or one contiguous responsive page range from the original document.",
+    "Set page_start for every evidence item. Set page_end only when the evidence spans more than one page.",
+    "List people, places, and dates only when they are mentioned or clearly referenced within that specific page or page range.",
+    "Order each evidence item's people list by importance to that specific page or page range, most important first.",
+]
+DOCUMENT_SPLIT_NOTE = (
+    "This document was split into multiple PDF chunks for upload. Treat all uploaded chunks as one original document."
+)
+DOCUMENT_CHUNK_TEMPLATE = "Chunk {index}: original pages {start_page}-{end_page}."
+SYNTHESIS_INSTRUCTIONS = (
+    "You are synthesizing previously extracted, per-document findings for a journalist. "
+    "Answer the question across the archive using only the provided document summaries and evidence. "
+    "Do not invent facts or quote the PDFs directly."
+)
+SYNTHESIS_PROMPT_PAYLOAD_KEYS = [
+    "instructions",
+    "question",
+    "total_documents",
+    "successful_documents",
+    "responsive_documents",
+]
 
 
 def require_api_key() -> str:
@@ -31,8 +63,11 @@ def build_client(api_key: str | None = None) -> genai.Client:
 
 def wait_for_file_processing(client: genai.Client, uploaded_file: File) -> File:
     while uploaded_file.state and uploaded_file.state.name == "PROCESSING":
+        remote_name = uploaded_file.name
+        if remote_name is None:
+            raise RuntimeError("Gemini returned a file without a remote name.")
         time.sleep(2)
-        uploaded_file = client.files.get(name=uploaded_file.name)
+        uploaded_file = client.files.get(name=remote_name)
     if uploaded_file.state and uploaded_file.state.name == "FAILED":
         raise RuntimeError(f"Gemini failed to process uploaded file {uploaded_file.name}")
     return uploaded_file
@@ -102,7 +137,7 @@ def get_or_upload_candidate(
             }
         )
         return uploaded_file
-    except Exception as exc:
+    except (errors.APIError, OSError, RuntimeError, ValueError) as exc:
         db.insert_gemini_call_log(
             {
                 "run_id": run_id,
@@ -115,7 +150,7 @@ def get_or_upload_candidate(
                 "created_at": utc_now_iso(),
             }
         )
-        raise
+        raise UploadCandidateError(str(exc)) from exc
 
 
 def build_document_prompt(
@@ -125,24 +160,20 @@ def build_document_prompt(
     candidates: list[PreparedCandidate],
 ) -> dict[str, Any]:
     prompt_lines = [
-        "You are a precise archival researcher helping a journalist answer a question from a PDF archive.",
+        DOCUMENT_PROMPT_INSTRUCTIONS[0],
         f"Question: {question}",
         f"Original source filename: {source_filename}",
-        "Return only structured JSON matching the provided schema.",
-        "Do not quote the PDF directly. Paraphrase the responsive material.",
-        "If the document is not responsive, set responsive=false, keep the score low, and leave evidence_items empty.",
-        "Use original document page numbers. Each evidence item must describe one responsive page or one contiguous responsive page range from the original document.",
-        "Set page_start for every evidence item. Set page_end only when the evidence spans more than one page.",
-        "List people, places, and dates only when they are mentioned or clearly referenced within that specific page or page range.",
-        "Order each evidence item's people list by importance to that specific page or page range, most important first.",
+        *DOCUMENT_PROMPT_INSTRUCTIONS[1:],
     ]
     if len(candidates) > 1:
-        prompt_lines.append(
-            "This document was split into multiple PDF chunks for upload. Treat all uploaded chunks as one original document."
-        )
+        prompt_lines.append(DOCUMENT_SPLIT_NOTE)
         for index, candidate in enumerate(candidates, start=1):
             prompt_lines.append(
-                f"Chunk {index}: original pages {candidate.start_page}-{candidate.end_page}."
+                DOCUMENT_CHUNK_TEMPLATE.format(
+                    index=index,
+                    start_page=candidate.start_page,
+                    end_page=candidate.end_page,
+                )
             )
     return {"text": "\n".join(prompt_lines)}
 
@@ -162,19 +193,25 @@ def analyze_document_with_files(
         candidates=candidates,
     )
     contents: list[types.Part | File] = [types.Part.from_text(text=prompt_payload["text"]), *uploaded_files]
-    response = client.models.generate_content(
-        model=model_name,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_json_schema=DocumentAnalysisResult.model_json_schema(),
-        ),
-    )
-    return (
-        DocumentAnalysisResult.model_validate_json(response.text),
-        prompt_payload,
-        response,
-    )
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=DocumentAnalysisResult.model_json_schema(),
+            ),
+        )
+        response_text = response.text
+        if response_text is None:
+            raise DocumentAnalysisError("Gemini returned an empty document-analysis response.")
+        return (
+            DocumentAnalysisResult.model_validate_json(response_text),
+            prompt_payload,
+            response,
+        )
+    except (errors.APIError, ValidationError) as exc:
+        raise DocumentAnalysisError(str(exc)) from exc
 
 
 def build_synthesis_prompt(
@@ -185,11 +222,7 @@ def build_synthesis_prompt(
     responsive_documents: list[dict[str, Any]],
 ) -> dict[str, Any]:
     prompt = {
-        "instructions": (
-            "You are synthesizing previously extracted, per-document findings for a journalist. "
-            "Answer the question across the archive using only the provided document summaries and evidence. "
-            "Do not invent facts or quote the PDFs directly."
-        ),
+        "instructions": SYNTHESIS_INSTRUCTIONS,
         "question": question,
         "total_documents": total_documents,
         "successful_documents": successful_documents,
@@ -213,26 +246,32 @@ def synthesize_project(
         successful_documents=successful_documents,
         responsive_documents=responsive_documents,
     )
-    response = client.models.generate_content(
-        model=model_name,
-        contents=[
-            types.Part.from_text(
-                text=(
-                    "Return only structured JSON matching the provided schema.\n\n"
-                    + json.dumps(prompt_payload, indent=2, sort_keys=True)
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[
+                types.Part.from_text(
+                    text=(
+                        "Return only structured JSON matching the provided schema.\n\n"
+                        + json.dumps(prompt_payload, indent=2, sort_keys=True)
+                    )
                 )
-            )
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_json_schema=ProjectSynthesisResult.model_json_schema(),
-        ),
-    )
-    return (
-        ProjectSynthesisResult.model_validate_json(response.text),
-        prompt_payload,
-        response,
-    )
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=ProjectSynthesisResult.model_json_schema(),
+            ),
+        )
+        response_text = response.text
+        if response_text is None:
+            raise ProjectSynthesisError("Gemini returned an empty project-synthesis response.")
+        return (
+            ProjectSynthesisResult.model_validate_json(response_text),
+            prompt_payload,
+            response,
+        )
+    except (errors.APIError, ValidationError) as exc:
+        raise ProjectSynthesisError(str(exc)) from exc
 
 
 def usage_to_cost_fields(

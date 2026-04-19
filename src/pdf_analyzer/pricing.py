@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import re
 from dataclasses import dataclass
-from html import unescape
-from html.parser import HTMLParser
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from google.genai import errors as genai_errors
+from google.genai import types
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from .exceptions import PricingSnapshotError
 
 PRICING_OBJECT_NAME = "gemini-prices.google.com"
 DEFAULT_PRICING_SOURCE_URL = "https://ai.google.dev/gemini-api/docs/pricing"
@@ -33,122 +35,93 @@ class UsageCostEstimate:
     total_cost_usd: float
 
 
-class _TextExtractor(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self._parts: list[str] = []
+class PricingModelExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "tr", "br", "div", "section"}:
-            self._parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "tr", "br", "div", "section"}:
-            self._parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def text(self) -> str:
-        return "".join(self._parts)
+    display_name: str
+    aliases: list[str] = Field(default_factory=list)
+    standard_input_usd_per_million_tokens: float
+    standard_output_usd_per_million_tokens: float
+    notes: str | None = None
 
 
-def _strip_scripts_and_styles(html: str) -> str:
-    html = re.sub(r"<script\b[^>]*>.*?</script>", "", html, flags=re.IGNORECASE | re.DOTALL)
-    html = re.sub(r"<style\b[^>]*>.*?</style>", "", html, flags=re.IGNORECASE | re.DOTALL)
-    return html
+class PricingSnapshotExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    models: list[PricingModelExtraction] = Field(default_factory=list)
+    notes: str | None = None
 
 
-def _html_to_text(html: str) -> list[str]:
-    parser = _TextExtractor()
-    parser.feed(_strip_scripts_and_styles(html))
-    raw_text = unescape(parser.text())
-    lines = [re.sub(r"\s+", " ", line).strip() for line in raw_text.splitlines()]
-    return [line for line in lines if line]
+def _build_pricing_extraction_prompt(*, source_url: str, source_html: str) -> str:
+    return f"""You are extracting Gemini Developer API pricing from Google's published pricing page.
+Source URL: {source_url}
+
+Return only structured JSON matching the provided schema.
+Extract only Gemini Developer API model pricing from this source HTML.
+For each model, return the aliases exactly as shown when available.
+For prices, return only the Standard paid-tier text/image/video rates in USD per 1M tokens.
+Ignore Free tier, Batch, Flex, Priority, grounding, context caching, storage, and audio-only prices.
+If a Standard paid tier has multiple prompt-length bands, return the lower-band rate and mention the threshold in notes.
+Do not invent missing models or prices.
+
+Source HTML follows:
+{source_html}
+"""
 
 
-def _extract_model_sections(html: str) -> list[tuple[str, str]]:
-    return [
-        (match.group(1).strip(), match.group(2))
-        for match in re.finditer(
-            r"<h2[^>]*>\s*(Gemini[^<]+?)\s*</h2>(.*?)(?=<h2[^>]*>|</main>|</body>)",
-            html,
-            flags=re.IGNORECASE | re.DOTALL,
+def extract_pricing_snapshot_with_gemini(
+    *,
+    client: Any,
+    model_name: str,
+    source_url: str,
+    source_html: str,
+) -> dict[str, Any]:
+    prompt = _build_pricing_extraction_prompt(source_url=source_url, source_html=source_html)
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[types.Part.from_text(text=prompt)],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=PricingSnapshotExtraction.model_json_schema(),
+            ),
         )
-    ]
-
-
-def _extract_standard_block(section_html: str) -> str:
-    match = re.search(
-        r"<h3[^>]*>\s*Standard\s*</h3>(.*?)(?=<h3[^>]*>|<h2[^>]*>|</main>|</body>)",
-        section_html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    return match.group(1) if match else section_html
-
-
-def _extract_first_price(line: str) -> float | None:
-    match = re.search(r"\$([0-9]+(?:\.[0-9]+)?)", line)
-    if not match:
-        return None
-    return float(match.group(1))
-
-
-def _find_price_line(lines: list[str], label: str) -> str:
-    label_key = label.casefold()
-    for line in lines:
-        if label_key in line.casefold():
-            return line
-    return ""
-
-
-def _model_aliases(section_text_lines: list[str]) -> list[str]:
-    aliases: list[str] = []
-    for line in section_text_lines[:8]:
-        aliases.extend(re.findall(r"gemini-[a-z0-9.\-]+", line))
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for alias in aliases:
-        if alias in seen:
-            continue
-        seen.add(alias)
-        deduped.append(alias)
-    return deduped
-
-
-def parse_pricing_page_html(html: str, *, source_url: str = DEFAULT_PRICING_SOURCE_URL) -> dict[str, Any]:
+        response_text = response.text
+        if response_text is None:
+            raise PricingSnapshotError("Gemini returned an empty pricing extraction response.")
+        extraction = PricingSnapshotExtraction.model_validate_json(response_text)
+    except (genai_errors.APIError, ValidationError) as exc:
+        raise PricingSnapshotError(str(exc)) from exc
     models: dict[str, Any] = {}
-    extracted_at_source = source_url
-    for display_name, section_html in _extract_model_sections(html):
-        section_lines = _html_to_text(section_html)
-        aliases = _model_aliases(section_lines)
-        standard_lines = _html_to_text(_extract_standard_block(section_html))
-        input_line = _find_price_line(standard_lines, "Input price")
-        output_line = _find_price_line(standard_lines, "Output price")
-        input_price = _extract_first_price(input_line)
-        output_price = _extract_first_price(output_line)
-        if not aliases or input_price is None or output_price is None:
-            continue
-        model_entry = {
-            "display_name": display_name,
-            "aliases": aliases,
+    for item in extraction.models:
+        entry = {
+            "display_name": item.display_name,
+            "aliases": item.aliases,
             "standard": {
-                "input_usd_per_million_tokens": input_price,
-                "output_usd_per_million_tokens": output_price,
+                "input_usd_per_million_tokens": item.standard_input_usd_per_million_tokens,
+                "output_usd_per_million_tokens": item.standard_output_usd_per_million_tokens,
             },
+            "notes": item.notes,
         }
-        for alias in aliases:
-            models[alias] = model_entry
+        for alias in item.aliases:
+            models[alias] = entry
 
     return {
         "object_name": PRICING_OBJECT_NAME,
-        "source_url": extracted_at_source,
+        "source_url": source_url,
         "pricing_mode": "standard",
+        "parsed_by_model": model_name,
+        "notes": extraction.notes,
         "models": models,
     }
 
 
-def fetch_pricing_snapshot(*, source_url: str = DEFAULT_PRICING_SOURCE_URL) -> tuple[dict[str, Any], dict[str, Any]]:
+def fetch_pricing_snapshot(
+    *,
+    client: Any,
+    model_name: str,
+    source_url: str = DEFAULT_PRICING_SOURCE_URL,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     request = Request(
         source_url,
         headers={
@@ -156,18 +129,28 @@ def fetch_pricing_snapshot(*, source_url: str = DEFAULT_PRICING_SOURCE_URL) -> t
             "Accept": "text/html,application/xhtml+xml",
         },
     )
-    with urlopen(request, timeout=30) as response:
-        body_bytes = response.read()
-        headers = dict(response.headers.items())
-        content_type = response.headers.get_content_type()
-    html = body_bytes.decode("utf-8", errors="replace")
-    payload = parse_pricing_page_html(html, source_url=source_url)
+    try:
+        with urlopen(request, timeout=30) as response:
+            body_bytes = response.read()
+            headers = dict(response.headers.items())
+            content_type = response.headers.get_content_type()
+        source_html = body_bytes.decode("utf-8", errors="replace")
+        payload = extract_pricing_snapshot_with_gemini(
+            client=client,
+            model_name=model_name,
+            source_url=source_url,
+            source_html=source_html,
+        )
+    except (HTTPError, URLError, OSError) as exc:
+        raise PricingSnapshotError(str(exc)) from exc
     if not payload["models"]:
-        raise ValueError(f"No Gemini model prices could be parsed from {source_url}")
+        raise PricingSnapshotError(
+            f"No Gemini model prices could be extracted from {source_url}"
+        )
     metadata = {
         "source_url": source_url,
         "content_type": content_type,
-        "content_sha256": hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest(),
+        "content_sha256": hashlib.sha256(body_bytes).hexdigest(),
         "source_etag": headers.get("ETag"),
         "source_last_modified": headers.get("Last-Modified"),
     }

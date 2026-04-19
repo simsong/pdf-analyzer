@@ -329,7 +329,7 @@
                 {% for mention in person.mentions %}
                 <div class="mention-line">
                   <a href="#{{ mention.anchor }}">{{ mention.date_badge_label }}</a> | {{ mention.brief_summary }}
-                  <span class="chips">({{ mention.source_filename }}{% if mention.page_label %}, {% if mention.page_href %}<a href="{{ mention.page_href }}">{{ mention.page_label }}</a>{% else %}{{ mention.page_label }}{% endif %}{% endif %})</span>
+                  <span class="chips">({{ mention.source_filename }}{% if mention.page_label %}, {% if mention.page_href %}<a href="{{ mention.page_href }}" target="_blank" rel="noopener noreferrer">{{ mention.page_label }}</a>{% else %}{{ mention.page_label }}{% endif %}{% endif %})</span>
                 </div>
                 {% endfor %}
               </div>
@@ -353,7 +353,7 @@
           <div class="eyebrow">
             <span class="pill date-pill">{{ row.date_badge_label }}</span>
             <span class="pill">{{ row.key_person }}</span>
-            {% if row.page_label %}{% if row.page_href %}<a class="pill" href="{{ row.page_href }}">{{ row.page_label }}</a>{% else %}<span class="pill">{{ row.page_label }}</span>{% endif %}{% endif %}
+            {% if row.page_label %}{% if row.page_href %}<a class="pill" href="{{ row.page_href }}" target="_blank" rel="noopener noreferrer">{{ row.page_label }}</a>{% else %}<span class="pill">{{ row.page_label }}</span>{% endif %}{% endif %}
             <span class="pill">Score {% if row.relevance_score is not none %}{{ row.relevance_score }}/10{% else %}?{% endif %}</span>
           </div>
           <h3>{{ row.brief_summary }}</h3>
@@ -371,9 +371,6 @@
             <div><strong>People:</strong> {{ row.people | join("; ") }}</div>
             {% endif %}
           </div>
-          {% if row.document_summary %}
-          <p class="document-summary"><strong>Document Summary:</strong> {{ row.document_summary }}</p>
-          {% endif %}
         </article>
         {% endfor %}
       </div>
@@ -417,7 +414,7 @@
                 <div class="mention-line">
                   <a href="#{{ item.anchor }}">{{ item.brief_summary }}</a>
                   <span class="chips">(
-                    {% if item.page_href %}<a href="{{ item.page_href }}">{{ item.page_label }}</a>{% else %}{{ item.page_label }}{% endif %}
+                    {% if item.page_href %}<a href="{{ item.page_href }}" target="_blank" rel="noopener noreferrer">{{ item.page_label }}</a>{% else %}{{ item.page_label }}{% endif %}
                     {% if item.people %} | {{ item.people | join("; ") }}{% endif %}
                   )</span>
                 </div>

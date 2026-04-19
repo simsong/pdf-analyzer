@@ -27,6 +27,8 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "pylint>=4.0.5",
+    "pyright>=1.1.408",
     "pytest>=8.4.2",
 ]
 
@@ -51,3 +53,65 @@ addopts = ["--strict-markers"]
 markers = [
     "gemini_live: opt-in Gemini-backed live integration tests",
 ]
+python_files = ["*_test.py", "test_*.py"]
+filterwarnings = [
+  "ignore::DeprecationWarning:pkg_resources",
+  "ignore:pkg_resources is deprecated:UserWarning",
+  "ignore:'_UnionGenericAlias' is deprecated and slated for removal in Python 3.17:DeprecationWarning:google.genai.types",
+]
+
+
+[tool.pylint.messages_control]
+# Disable specific messages by their symbolic name or message ID.
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+    "line-too-long",
+    "unspecified-encoding",
+    "redefined-outer-name",
+    "unused-argument",
+    "invalid-name",
+    "too-many-locals",
+    "too-many-branches",
+    "too-many-statements",
+    "fixme",
+    "trailing-whitespace",      # AI does this
+    "trailing-newlines",
+    "too-many-positional-arguments",
+    "too-many-return-statements",
+    "too-many-lines",
+    "too-few-public-methods",
+    "too-many-branches",
+    "too-many-arguments",
+    "too-many-public-methods",
+    "too-many-instance-attributes"
+]
+
+[tool.pylint.design]
+max-args = 10
+max-public-methods = 20
+
+[tool.pylint.typecheck]
+# av is a C extension used by lambda-resize; allow it so E0401 is not raised.
+extension-pkg-allow-list = ["av"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+venvPath = "./"
+venv = ".venv"
+include = ["."]
+exclude = [
+  "**/build",
+  "**/.aws-sam",
+  "**/.mypy_cache",
+  "**/.pytest_cache",
+  "**/__pycache__",
+  "**/conftest.py"
+]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = "warning"
+
+[[tool.pyright.executionEnvironments]]
+root = "."
+extraPaths = ["src", "lambda-resize/src"]

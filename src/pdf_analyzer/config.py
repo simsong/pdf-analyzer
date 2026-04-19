@@ -43,11 +43,11 @@ class ProjectConfig(BaseModel):
 
     @property
     def resolved_pdf_directory(self) -> Path:
-        return self.pdf_directory.expanduser().resolve()
+        return Path(self.pdf_directory).expanduser().resolve()
 
     @property
     def resolved_output_directory(self) -> Path:
-        return self.output_directory.expanduser().resolve()
+        return Path(self.output_directory).expanduser().resolve()
 
     @classmethod
     def from_path(cls, path: Path) -> "ProjectConfig":

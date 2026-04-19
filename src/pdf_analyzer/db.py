@@ -318,6 +318,7 @@ class Database:
             ),
         )
         self.connection().commit()
+        assert cursor.lastrowid is not None
         return int(cursor.lastrowid)
 
     def fetch_latest_object(self, object_name: str) -> sqlite3.Row | None:
@@ -530,6 +531,7 @@ class Database:
             (query_id, config_path, int(no_gemini), workers, started_at),
         )
         conn.commit()
+        assert cursor.lastrowid is not None
         return int(cursor.lastrowid)
 
     def finalize_run(
@@ -698,6 +700,88 @@ class Database:
             "output_cost_usd": float(document_summary["output_cost_usd"]) + float(synthesis_payload.get("output_cost_usd", 0.0)),
             "total_cost_usd": float(document_summary["total_cost_usd"]) + float(synthesis_payload.get("total_cost_usd", 0.0)),
         }
+
+    def backfill_missing_usage_costs(
+        self,
+        *,
+        query_id: int,
+        pricing_snapshot: dict[str, Any],
+    ) -> None:
+        from .pricing import estimate_usage_cost
+
+        conn = self.connection()
+        document_rows = conn.execute(
+            """
+            SELECT id, model_name, prompt_tokens, candidate_tokens, total_tokens
+            FROM document_analyses
+            WHERE query_id = ?
+              AND total_cost_usd = 0
+              AND (prompt_tokens > 0 OR candidate_tokens > 0 OR total_tokens > 0)
+            """,
+            (query_id,),
+        ).fetchall()
+        for row in document_rows:
+            estimate = estimate_usage_cost(
+                pricing_snapshot,
+                row["model_name"],
+                prompt_tokens=int(row["prompt_tokens"] or 0),
+                candidate_tokens=int(row["candidate_tokens"] or 0),
+                total_tokens=int(row["total_tokens"] or 0),
+            )
+            if estimate is None:
+                continue
+            conn.execute(
+                """
+                UPDATE document_analyses
+                SET input_cost_usd = ?,
+                    output_cost_usd = ?,
+                    total_cost_usd = ?
+                WHERE id = ?
+                """,
+                (
+                    estimate.input_cost_usd,
+                    estimate.output_cost_usd,
+                    estimate.total_cost_usd,
+                    row["id"],
+                ),
+            )
+
+        synthesis_row = conn.execute(
+            """
+            SELECT id, model_name, prompt_tokens, candidate_tokens, total_tokens
+            FROM project_syntheses
+            WHERE query_id = ?
+              AND total_cost_usd = 0
+              AND (prompt_tokens > 0 OR candidate_tokens > 0 OR total_tokens > 0)
+            """,
+            (query_id,),
+        ).fetchone()
+        if synthesis_row is not None:
+            estimate = estimate_usage_cost(
+                pricing_snapshot,
+                synthesis_row["model_name"],
+                prompt_tokens=int(synthesis_row["prompt_tokens"] or 0),
+                candidate_tokens=int(synthesis_row["candidate_tokens"] or 0),
+                total_tokens=int(synthesis_row["total_tokens"] or 0),
+            )
+            if estimate is not None:
+                conn.execute(
+                    """
+                    UPDATE project_syntheses
+                    SET input_cost_usd = ?,
+                        output_cost_usd = ?,
+                        total_cost_usd = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        estimate.input_cost_usd,
+                        estimate.output_cost_usd,
+                        estimate.total_cost_usd,
+                        synthesis_row["id"],
+                    ),
+                )
+
+        conn.commit()
 
     def upsert_upload(
         self,
