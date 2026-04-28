@@ -38,6 +38,16 @@ Optional fields include:
 One YAML file corresponds to one SQLite database and one output directory.
 The configured version strings are still supported, but the analyzer also computes automatic prompt/schema fingerprints so cache invalidation follows actual structural changes.
 
+## Runtime Environment
+
+The current runtime environment surface is intentionally small.
+
+Application code uses:
+
+- `GEMINI_API_KEY`
+
+This variable is required only for runs that make Gemini API calls. Report-only rerenders using `--no-gemini` can run without it if the needed cached state is already present in SQLite.
+
 ## Durable State
 
 The analyzer writes the following durable outputs into `output_directory`:

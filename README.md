@@ -25,6 +25,13 @@ Run the analyzer with a YAML config:
 uv run analyze pdf-analyzer.example.yaml
 ```
 
+Runtime environment:
+
+- `GEMINI_API_KEY`
+  Required for any run that makes Gemini API calls.
+  Not required when using `--no-gemini` to render reports from cached SQLite state only.
+  Also used by the optional live Gemini test and the name-clustering comparison harness.
+
 Config shape:
 
 ```yaml
@@ -76,5 +83,6 @@ Intermediate prepared PDFs are written to a temporary directory for the duration
 
 - `uv run analyze ...` is the preferred CLI.
 - `uv run pdf-analyzer ...` remains as a compatibility alias.
+- The only runtime environment variable currently used by the application code is `GEMINI_API_KEY`.
 - A successful rerun with no new work reuses cached per-document analyses and cached project synthesis, then re-renders the reports.
 - Cache reuse is keyed by the configured versions plus automatic prompt/schema fingerprints, so structural model-output changes invalidate old cached analyses even if you forget to bump YAML version strings.

@@ -32,6 +32,21 @@ Important optional controls include:
 - `schema_version`
 - `synthesis_prompt_version`
 
+## Runtime Environment
+
+The application code currently uses one runtime environment variable:
+
+- `GEMINI_API_KEY`
+  Required when the run needs to call Gemini for:
+  - document analysis
+  - project synthesis
+  - Gemini-backed name clustering
+  - Gemini-backed pricing extraction
+
+The optional live test and the standalone name-clustering comparison harness also check for `GEMINI_API_KEY` before attempting live Gemini calls.
+
+When the analyzer is run with `--no-gemini`, it can regenerate reports from stored SQLite state without `GEMINI_API_KEY`, as long as the required cached analysis and synthesis data already exist.
+
 ## Per-Document Extraction
 
 For each PDF that needs analysis, the system:

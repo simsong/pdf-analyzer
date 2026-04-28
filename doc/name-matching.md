@@ -66,6 +66,8 @@ It sends Gemini:
 
 Gemini then returns clusters and a representative name for each cluster.
 
+This path requires `GEMINI_API_KEY`.
+
 If Gemini clustering is requested but Gemini use is disabled for the run, the analyzer falls back to local clustering so report generation still completes.
 
 ## Other Possible Approaches
