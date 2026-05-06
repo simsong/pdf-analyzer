@@ -40,9 +40,52 @@ pdf_directory: ./pdfs
 output_directory: ./example-output
 question: What does this archive say about bridge safety?
 name_clustering: local
+schema_version: v1
 ```
 
-Optional overrides such as `model`, `workers`, `oversize_strategy`, and `name_clustering` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
+Optional overrides such as `model`, `workers`, `oversize_strategy`, `name_clustering`, `prompt_version`, `schema_version`, and `synthesis_prompt_version` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
+
+## Extraction Schema
+
+The config file uses `schema_version` to identify the structured extraction schema for cache identity. The default is `v1`. When the Pydantic schema in `src/pdf_analyzer/models.py` changes, the analyzer also adds an automatic schema fingerprint, so old cached Gemini responses are not reused with a structurally different schema.
+
+The current config file does not accept a custom top-level `schema:` block. To extract a domain-specific activity, put that requirement in the `question`. For example:
+
+```yaml
+name: Activity Archive
+pdf_directory: ./pdfs
+output_directory: ./activity-output
+question: For each responsive document, identify the name, date, place, and activity. Include only activities that are supported by the PDF text.
+schema_version: v1
+```
+
+With the default schema, names, dates, and places are stored in typed lists. Activities are captured in the document and evidence summaries unless the application schema and report storage are extended to make activity a first-class field.
+
+Default document-analysis schema:
+
+```yaml
+DocumentAnalysisResult:
+  responsive: boolean
+  relevance_score: integer  # 0-10
+  summary: string
+  people:
+    - string
+  places:
+    - string
+  dates:
+    - string
+  evidence_items:
+    - page_start: integer | null
+      page_end: integer | null
+      summary: string
+      people:
+        - string
+      places:
+        - string
+      dates:
+        - string
+  reasoning_notes: string | null
+```
 
 ## Outputs
 

@@ -2,3 +2,31 @@ name: Example Archive
 pdf_directory: ./pdfs
 output_directory: ./example-output
 question: What does this archive say about bridge safety?
+schema_version: v1
+
+# Default extraction schema for schema_version: v1.
+# This schema is built into src/pdf_analyzer/models.py. The config file uses
+# schema_version for cache identity; it does not currently accept a custom
+# top-level schema block.
+#
+# DocumentAnalysisResult:
+#   responsive: boolean
+#   relevance_score: integer  # 0-10
+#   summary: string
+#   people:
+#     - string
+#   places:
+#     - string
+#   dates:
+#     - string
+#   evidence_items:
+#     - page_start: integer | null
+#       page_end: integer | null
+#       summary: string
+#       people:
+#         - string
+#       places:
+#         - string
+#       dates:
+#         - string
+#   reasoning_notes: string | null
