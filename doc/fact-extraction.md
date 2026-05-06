@@ -28,6 +28,7 @@ Important optional controls include:
 - `workers`
 - `oversize_strategy`
 - `name_clustering`
+- `ignore_dirs_containing`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`

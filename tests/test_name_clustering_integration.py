@@ -16,6 +16,33 @@ def test_project_config_defaults_name_clustering_to_local() -> None:
         }
     )
     assert config.name_clustering == "local"
+    assert config.ignore_dirs_containing == [".pdfdata"]
+
+
+def test_project_config_accepts_single_ignore_marker() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "name": "Example",
+            "pdf_directory": ".",
+            "output_directory": ".",
+            "question": "What happened?",
+            "ignore_dirs_containing": ".skip-pdfs",
+        }
+    )
+    assert config.ignore_dirs_containing == [".skip-pdfs"]
+
+
+def test_project_config_accepts_ignore_marker_list() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "name": "Example",
+            "pdf_directory": ".",
+            "output_directory": ".",
+            "question": "What happened?",
+            "ignore_dirs_containing": [".pdfdata", ".skip-pdfs"],
+        }
+    )
+    assert config.ignore_dirs_containing == [".pdfdata", ".skip-pdfs"]
 
 
 def test_project_config_rejects_unknown_name_clustering_method() -> None:

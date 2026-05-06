@@ -2,10 +2,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .constants import (
     DEFAULT_MODEL,
+    DEFAULT_OUTPUT_MARKER_FILENAME,
     DEFAULT_OVERSIZE_STRATEGY,
     DEFAULT_PROMPT_VERSION,
     DEFAULT_SCHEMA_VERSION,
@@ -28,14 +29,26 @@ class ProjectConfig(BaseModel):
     workers: int | None = None
     oversize_strategy: str = DEFAULT_OVERSIZE_STRATEGY
     name_clustering: str = "local"
+    ignore_dirs_containing: list[str] = Field(
+        default_factory=lambda: [DEFAULT_OUTPUT_MARKER_FILENAME],
+    )
     prompt_version: str = DEFAULT_PROMPT_VERSION
     schema_version: str = DEFAULT_SCHEMA_VERSION
     synthesis_prompt_version: str = DEFAULT_SYNTHESIS_PROMPT_VERSION
 
     config_path: Path | None = None
 
+    @field_validator("ignore_dirs_containing", mode="before")
+    @classmethod
+    def coerce_ignore_dirs_containing(cls, value: Any) -> Any:
+        if value is None:
+            return [DEFAULT_OUTPUT_MARKER_FILENAME]
+        if isinstance(value, str):
+            return [value]
+        return value
+
     @model_validator(mode="after")
-    def validate_oversize_strategy(self) -> "ProjectConfig":
+    def validate_config_values(self) -> "ProjectConfig":
         allowed = {"chunk", "auto", "none", "qpdf", "ebook"}
         if self.oversize_strategy not in allowed:
             raise ValueError(
@@ -46,6 +59,14 @@ class ProjectConfig(BaseModel):
                 "name_clustering must be one of "
                 f"{sorted(SUPPORTED_NAME_CLUSTERING_METHODS)}, got {self.name_clustering!r}"
             )
+        for marker_filename in self.ignore_dirs_containing:
+            if not marker_filename.strip():
+                raise ValueError("ignore_dirs_containing marker filenames must be non-empty")
+            if Path(marker_filename).name != marker_filename:
+                raise ValueError(
+                    "ignore_dirs_containing entries must be marker filenames, not paths: "
+                    f"{marker_filename!r}"
+                )
         return self
 
     @property

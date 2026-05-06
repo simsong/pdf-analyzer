@@ -1,8 +1,36 @@
+import json
 import sys
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from pdf_analyzer.exceptions import PricingSnapshotError
-from pdf_analyzer.main import main
+from pdf_analyzer.main import discover_pdf_paths, main, write_output_marker
+
+
+def test_discover_pdf_paths_skips_directories_with_ignore_markers(tmp_path: Path) -> None:
+    kept_pdf = tmp_path / "keep.pdf"
+    kept_pdf.write_bytes(b"%PDF-1.4\n")
+
+    ignored_dir = tmp_path / "output"
+    ignored_dir.mkdir()
+    (ignored_dir / ".pdfdata").write_text("{}\n", encoding="utf-8")
+    (ignored_dir / "report.pdf").write_bytes(b"%PDF-1.4\n")
+
+    nested_ignored_dir = ignored_dir / "pdfs"
+    nested_ignored_dir.mkdir()
+    (nested_ignored_dir / "copy.pdf").write_bytes(b"%PDF-1.4\n")
+
+    assert discover_pdf_paths(tmp_path, [".pdfdata"]) == [kept_pdf]
+
+
+def test_write_output_marker_records_timestamp(tmp_path: Path) -> None:
+    write_output_marker(tmp_path)
+
+    payload = json.loads((tmp_path / ".pdfdata").read_text(encoding="utf-8"))
+
+    assert set(payload) == {"timestamp"}
+    datetime.fromisoformat(payload["timestamp"])
 
 
 def test_list_models_prints_available_models_and_prices(monkeypatch, capsys) -> None:

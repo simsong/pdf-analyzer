@@ -40,10 +40,13 @@ pdf_directory: ./pdfs
 output_directory: ./example-output
 question: What does this archive say about bridge safety?
 name_clustering: local
+ignore_dirs_containing: .pdfdata
 schema_version: v1
 ```
 
-Optional overrides such as `model`, `workers`, `oversize_strategy`, `name_clustering`, `prompt_version`, `schema_version`, and `synthesis_prompt_version` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
+Optional overrides such as `model`, `workers`, `oversize_strategy`, `name_clustering`, `ignore_dirs_containing`, `prompt_version`, `schema_version`, and `synthesis_prompt_version` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
+
+`ignore_dirs_containing` controls recursive PDF discovery. It may be one marker filename or a list of marker filenames. Any scanned directory containing one of those files is skipped, including all of its children. The default is `.pdfdata`; each run writes that hidden JSON marker into `output_directory`, so an output directory inside the PDF archive is not rescanned as source input.
 
 ## Extraction Schema
 
@@ -95,6 +98,7 @@ Each project run writes durable artifacts into `output_directory`:
 - `report.html`
 - `report.xlsx`
 - `pdfs/` containing copied responsive PDFs only
+- `.pdfdata` containing output metadata such as the run timestamp
 - a copy of the YAML config used for the run
 
 Intermediate prepared PDFs are written to a temporary directory for the duration of the run and are not kept afterward.

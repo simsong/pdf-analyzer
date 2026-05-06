@@ -31,6 +31,7 @@ Optional fields include:
 - `workers`
 - `oversize_strategy`
 - `name_clustering`
+- `ignore_dirs_containing`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
@@ -56,6 +57,7 @@ The analyzer writes the following durable outputs into `output_directory`:
 - `report.html`
 - `report.xlsx`
 - `pdfs/` containing copied responsive PDFs only
+- `.pdfdata` output marker JSON
 - a copy of the YAML config
 
 The SQLite database stores:
@@ -76,7 +78,7 @@ Prepared upload candidates such as staged originals, chunks, and compressed vari
 
 1. Load the YAML config.
 2. Open or initialize `pdf_analyzer.sqlite3`.
-3. Recursively scan `pdf_directory` for PDFs.
+3. Recursively scan `pdf_directory` for PDFs, skipping any directory containing a configured `ignore_dirs_containing` marker file.
 4. Hash each PDF with SHA-256 and record the document and path metadata.
 5. Determine which PDFs still need analysis for the active query.
 6. For each pending PDF:

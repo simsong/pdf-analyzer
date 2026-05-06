@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures
 import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -14,6 +15,7 @@ from .config import ProjectConfig
 from .constants import (
     DEFAULT_DATABASE_NAME,
     DEFAULT_MODEL,
+    DEFAULT_OUTPUT_MARKER_FILENAME,
     DEFAULT_OVERSIZE_STRATEGY,
     DEFAULT_WORKERS,
 )
@@ -40,7 +42,7 @@ from .pricing import (
     get_model_pricing,
 )
 from .reporting import generate_reports
-from .utils import file_hashes, normalize_question, utc_now_iso
+from .utils import file_hashes, normalize_question, utc_now_iso, write_json
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,14 +170,38 @@ def configure_logging(verbose: bool) -> None:
     logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 
-def discover_pdf_paths(pdf_directory: Path) -> list[Path]:
-    return sorted(path for path in pdf_directory.rglob("*.pdf") if path.is_file())
+def directory_has_ignore_marker(directory: Path, marker_filenames: list[str]) -> bool:
+    return any((directory / marker_filename).is_file() for marker_filename in marker_filenames)
+
+
+def discover_pdf_paths(pdf_directory: Path, ignore_dirs_containing: list[str]) -> list[Path]:
+    pdf_paths: list[Path] = []
+    for directory, child_dirs, filenames in os.walk(pdf_directory):
+        directory_path = Path(directory)
+        if directory_has_ignore_marker(directory_path, ignore_dirs_containing):
+            child_dirs.clear()
+            continue
+        for filename in filenames:
+            path = directory_path / filename
+            if path.suffix.casefold() == ".pdf" and path.is_file():
+                pdf_paths.append(path)
+    return sorted(pdf_paths)
+
+
+def write_output_marker(output_directory: Path) -> None:
+    write_json(
+        output_directory / DEFAULT_OUTPUT_MARKER_FILENAME,
+        {"timestamp": utc_now_iso()},
+    )
 
 
 def scan_archive(db: Database, config: ProjectConfig) -> list[dict[str, Any]]:
     now_iso = utc_now_iso()
     discovered: list[dict[str, Any]] = []
-    for pdf_path in discover_pdf_paths(config.resolved_pdf_directory):
+    for pdf_path in discover_pdf_paths(
+        config.resolved_pdf_directory,
+        config.ignore_dirs_containing,
+    ):
         try:
             sha256, _, size_bytes = file_hashes(pdf_path)
             inspector = PDFInspector(pdf_path)
@@ -533,6 +559,7 @@ def main() -> int:
     oversize_strategy = args.oversize_strategy or config.oversize_strategy or DEFAULT_OVERSIZE_STRATEGY
 
     output_dir = config.resolved_output_directory
+    write_output_marker(output_dir)
     database_path = output_dir / DEFAULT_DATABASE_NAME
     if config.config_path is not None:
         copied_config_path = output_dir / config.config_path.name

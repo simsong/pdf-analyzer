@@ -8,6 +8,7 @@ DEFAULT_DATABASE_NAME = "pdf_analyzer.sqlite3"
 DEFAULT_REPORT_HTML = "report.html"
 DEFAULT_REPORT_XLSX = "report.xlsx"
 DEFAULT_REPORT_PDFS_DIRNAME = "pdfs"
+DEFAULT_OUTPUT_MARKER_FILENAME = ".pdfdata"
 DEFAULT_WORK_DIRNAME = ".work"
 DEFAULT_WORK_PREPARED_DIRNAME = "prepared"
 DEFAULT_SCHEMA_VERSION = "v1"
@@ -24,4 +25,3 @@ DEFAULT_CONFIG_FILENAMES = (
     Path("project.yaml"),
     Path("project.yml"),
 )
-
