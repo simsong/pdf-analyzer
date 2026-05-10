@@ -32,6 +32,7 @@ Optional fields include:
 - `oversize_strategy`
 - `name_clustering`
 - `ignore_dirs_containing`
+- `report_html_filename`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
@@ -54,9 +55,9 @@ This variable is required only for runs that make Gemini API calls. Report-only 
 The analyzer writes the following durable outputs into `output_directory`:
 
 - `pdf_analyzer.sqlite3`
-- `report.html`
+- the configured HTML report, defaulting to `report.html`
 - `report.xlsx`
-- `pdfs/` containing copied responsive PDFs only
+- `pdfs/` containing copied responsive PDFs only; copied PDFs with encryption, JavaScript, interactive forms, or external file dependencies are converted to PDF/A-2b before report links are written
 - `.pdfdata` output marker JSON
 - a copy of the YAML config
 
@@ -89,7 +90,7 @@ Prepared upload candidates such as staged originals, chunks, and compressed vari
    - ask Gemini for a structured per-document result
    - store summary fields, evidence rows, failures, tokens, and cost
 7. Build or reuse the cached project synthesis.
-8. Render `report.html` and `report.xlsx`.
+8. Render the configured HTML report and `report.xlsx`.
 
 ## Idempotence Model
 
@@ -183,7 +184,7 @@ The HTML report is operator-facing and emphasizes fast review:
 - `Responsive Evidence Timeline`
   Displays one card per responsive evidence row, ordered chronologically, with date pill, key-person pill, page or page-range link into the copied PDF, canonical people list, and a link to the responsive-document entry.
 - `Responsive Documents`
-  Lists only responsive PDFs copied into `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names.
+  Lists only responsive PDFs copied into `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names. Report PDF copies are inspected with `pypdf`; copies with encryption, JavaScript, interactive forms, or external file dependencies are converted to PDF/A-2b with Ghostscript before the report links to them.
 - `Errors`
   Combines failures and unanalyzed PDFs in one operator-facing section while still distinguishing the two categories.
 

@@ -10,8 +10,10 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .constants import DEFAULT_REPORT_HTML
 from .name_clustering import canonicalize_name_list, cluster_names, person_sort_key
 from .name_clustering_models import NameStringRecord
+from .pdfa_tools import ensure_pdfa_if_needed
 from .pricing import PRICING_OBJECT_NAME
 from .utils import clone_or_copy_file, coerce_json_list, parse_sort_year, slugify, unique_copy_name
 
@@ -462,6 +464,7 @@ def generate_reports(
     model_name: str,
     name_clustering_method: str,
     allow_gemini: bool,
+    report_html_filename: str = DEFAULT_REPORT_HTML,
     run_summary: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -499,6 +502,7 @@ def generate_reports(
         report_name = unique_copy_name(row["canonical_filename"], used_names)
         target = pdf_dir / report_name
         clone_or_copy_file(source, target)
+        ensure_pdfa_if_needed(target)
         linked_files[row["sha256"]] = f"pdfs/{report_name}"
 
     evidence_rows: list[dict[str, Any]] = []
@@ -635,7 +639,7 @@ def generate_reports(
         unanalyzed_rows=unanalyzed_rows,
         failure_rows=failure_rows,
     )
-    html_path = output_dir / "report.html"
+    html_path = output_dir / report_html_filename
     html_path.write_text(html.rstrip() + "\n", encoding="utf-8")
 
     workbook = Workbook()

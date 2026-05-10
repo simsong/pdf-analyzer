@@ -9,6 +9,7 @@ from .constants import (
     DEFAULT_OUTPUT_MARKER_FILENAME,
     DEFAULT_OVERSIZE_STRATEGY,
     DEFAULT_PROMPT_VERSION,
+    DEFAULT_REPORT_HTML,
     DEFAULT_SCHEMA_VERSION,
     DEFAULT_SYNTHESIS_PROMPT_VERSION,
 )
@@ -32,11 +33,30 @@ class ProjectConfig(BaseModel):
     ignore_dirs_containing: list[str] = Field(
         default_factory=lambda: [DEFAULT_OUTPUT_MARKER_FILENAME],
     )
+    report_html_filename: str = DEFAULT_REPORT_HTML
     prompt_version: str = DEFAULT_PROMPT_VERSION
     schema_version: str = DEFAULT_SCHEMA_VERSION
     synthesis_prompt_version: str = DEFAULT_SYNTHESIS_PROMPT_VERSION
 
     config_path: Path | None = None
+
+    @field_validator("pdf_directory", "output_directory", mode="before")
+    @classmethod
+    def reject_directory_whitespace(cls, value: Any) -> Any:
+        if directory_has_outer_whitespace(value):
+            raise ValueError("directory paths must not have leading or trailing whitespace")
+        return value
+
+    @field_validator("report_html_filename")
+    @classmethod
+    def validate_report_html_filename(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("report_html_filename must not have leading or trailing whitespace")
+        if not value:
+            raise ValueError("report_html_filename must not be empty")
+        if Path(value).name != value:
+            raise ValueError("report_html_filename must be a filename, not a path")
+        return value
 
     @field_validator("ignore_dirs_containing", mode="before")
     @classmethod
@@ -103,8 +123,14 @@ def _resolve_relative_paths(payload: dict[str, Any], base_dir: Path) -> dict[str
         value = resolved.get(key)
         if not value:
             continue
+        if directory_has_outer_whitespace(value):
+            raise SystemExit(f"Config value {key} must not have leading or trailing whitespace")
         candidate = Path(value).expanduser()
         if not candidate.is_absolute():
             candidate = (base_dir / candidate).resolve()
         resolved[key] = candidate
     return resolved
+
+
+def directory_has_outer_whitespace(value: Any) -> bool:
+    return isinstance(value, str | Path) and str(value) != str(value).strip()

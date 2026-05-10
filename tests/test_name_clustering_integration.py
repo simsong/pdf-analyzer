@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import ValidationError
 
 from pdf_analyzer.config import ProjectConfig
@@ -17,6 +19,7 @@ def test_project_config_defaults_name_clustering_to_local() -> None:
     )
     assert config.name_clustering == "local"
     assert config.ignore_dirs_containing == [".pdfdata"]
+    assert config.report_html_filename == "report.html"
 
 
 def test_project_config_accepts_single_ignore_marker() -> None:
@@ -43,6 +46,95 @@ def test_project_config_accepts_ignore_marker_list() -> None:
         }
     )
     assert config.ignore_dirs_containing == [".pdfdata", ".skip-pdfs"]
+
+
+def test_project_config_accepts_custom_report_html_filename() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "name": "Example",
+            "pdf_directory": ".",
+            "output_directory": ".",
+            "question": "What happened?",
+            "report_html_filename": "wag-insider.html",
+        }
+    )
+    assert config.report_html_filename == "wag-insider.html"
+
+
+def test_project_config_rejects_report_html_path() -> None:
+    try:
+        ProjectConfig.model_validate(
+            {
+                "name": "Example",
+                "pdf_directory": ".",
+                "output_directory": ".",
+                "question": "What happened?",
+                "report_html_filename": "reports/wag-insider.html",
+            }
+        )
+    except ValidationError as exc:
+        assert "filename, not a path" in str(exc)
+        return
+    raise AssertionError("Expected report_html_filename path to be rejected")
+
+
+def test_project_config_rejects_report_html_filename_with_outer_whitespace() -> None:
+    try:
+        ProjectConfig.model_validate(
+            {
+                "name": "Example",
+                "pdf_directory": ".",
+                "output_directory": ".",
+                "question": "What happened?",
+                "report_html_filename": "wag-insider.html ",
+            }
+        )
+    except ValidationError as exc:
+        assert "leading or trailing whitespace" in str(exc)
+        return
+    raise AssertionError("Expected report_html_filename with whitespace to be rejected")
+
+
+def test_project_config_rejects_directory_path_with_outer_whitespace() -> None:
+    try:
+        ProjectConfig.model_validate(
+            {
+                "name": "Example",
+                "pdf_directory": ".",
+                "output_directory": "pdf-insider ",
+                "question": "What happened?",
+            }
+        )
+    except ValidationError as exc:
+        assert "leading or trailing whitespace" in str(exc)
+        return
+    raise AssertionError("Expected output_directory with trailing whitespace to be rejected")
+
+
+def test_project_config_from_path_rejects_quoted_trailing_whitespace(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    config_path = tmp_path / "project.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "name: Example",
+                "pdf_directory: ./pdfs",
+                'output_directory: "pdf-insider "',
+                "question: What happened?",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        ProjectConfig.from_path(config_path)
+    except SystemExit as exc:
+        assert "output_directory must not have leading or trailing whitespace" in str(exc)
+    else:
+        raise AssertionError("Expected quoted trailing whitespace to be rejected")
+    assert not (tmp_path / "pdf-insider ").exists()
 
 
 def test_project_config_rejects_unknown_name_clustering_method() -> None:

@@ -34,6 +34,7 @@ from .gemini import (
     synthesize_project,
     usage_to_cost_fields,
 )
+from .pdfa_tools import PDFAConversionError, ensure_ghostscript_available
 from .pdf_tools import PDFInspector, prepare_candidates_for_upload
 from .pricing import (
     DEFAULT_PRICING_FETCHER,
@@ -548,6 +549,10 @@ def maybe_skip_documents_for_no_gemini(
 def main() -> int:
     args = parse_args()
     configure_logging(args.verbose)
+    try:
+        ensure_ghostscript_available()
+    except PDFAConversionError as exc:
+        raise SystemExit(f"ERROR: {exc}") from exc
 
     if args.list_models:
         list_models_with_pricing()
@@ -865,6 +870,7 @@ def main() -> int:
                 model_name=model_name,
                 name_clustering_method=config.name_clustering,
                 allow_gemini=not args.no_gemini,
+                report_html_filename=config.report_html_filename,
                 run_summary=run_summary,
             )
             db.finalize_run(

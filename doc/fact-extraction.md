@@ -29,6 +29,7 @@ Important optional controls include:
 - `oversize_strategy`
 - `name_clustering`
 - `ignore_dirs_containing`
+- `report_html_filename`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
