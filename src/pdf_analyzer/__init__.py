@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """YAML-driven PDF archive question answering with Gemini and SQLite."""
 
 __all__ = ["__version__"]

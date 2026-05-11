@@ -1,11 +1,19 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 [project]
 name = "pdf-analyzer"
 version = "0.1.0"
 description = "Gemini-backed archive analysis for answering one question over a PDF collection"
 readme = "README.md"
 requires-python = ">=3.13"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [
     { name = "Simson L. Garfinkel" }
+]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
 ]
 dependencies = [
     "google-genai>=1.73.0",
@@ -18,7 +26,6 @@ dependencies = [
 ]
 
 [project.scripts]
-analyze = "pdf_analyzer.main:main"
 pdf-analyzer = "pdf_analyzer.main:main"
 pdfa-fix = "pdf_analyzer.pdfa_tools:main"
 
@@ -38,6 +45,11 @@ packages = ["src/pdf_analyzer"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "/CONTRIBUTING.md",
+    "/CONTRIBUTOR-LICENSE-AGREEMENT-TEMPLATE.md",
+    "/LICENSE",
+    "/LICENSE-OPTIONS.md",
+    "/NOTICE",
     "/README.md",
     "/doc",
     "/pyproject.toml",

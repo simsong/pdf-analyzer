@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import os
 import sqlite3
 import sys
@@ -89,7 +92,7 @@ def test_pdf_analyzer_live_single_pdf(tmp_path: Path, monkeypatch: pytest.Monkey
         sys,
         "argv",
         [
-            "analyze",
+            "pdf-analyzer",
             str(config_path),
             "--limit",
             "1",

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from pathlib import Path
 
 from pdf_analyzer.db import Database
