@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from pdf_analyzer.name_clustering_local import cluster_names_locally
 from tests.name_clustering_support import load_name_records
 

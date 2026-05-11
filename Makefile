@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 .PHONY: check check-all check-system-deps
 
 check: check-system-deps

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from typing import Any
 
 from pdf_analyzer.name_clustering_gemini import cluster_names_with_gemini

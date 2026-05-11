@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from pdf_analyzer.cache_identity import build_query_identity
 from pdf_analyzer.db import Database
 from pdf_analyzer.utils import utc_now_iso

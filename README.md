@@ -1,3 +1,6 @@
+<!-- Copyright (C) 2026 Sabinok Corporation -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # PDF Analyzer
 
 This repository contains a Gemini-backed archive analysis tool for answering one research question over a directory tree of PDFs. The supported system is the `pdf_analyzer` package in `src/pdf_analyzer/`.
@@ -133,6 +136,23 @@ Intermediate prepared PDFs are written to a temporary directory for the duration
   Focused note on document analysis, synthesis, and report data flow.
 - `doc/name-matching.md`
   Focused note on authoritative-name clustering, current options, and alternative approaches.
+- `LICENSE`, `NOTICE`, and `LICENSE-OPTIONS.md`
+  Public GPL license, Sabinok Corporation project notice, and alternate-license contact information.
+- `CONTRIBUTING.md`
+  Pull request policy, including contributor-agreement requirements for substantive outside contributions.
+
+## License
+
+Sabinok PDF is a Sabinok Corporation project.
+
+This project is released under the GNU General Public License, version 3 or
+later. Less restrictive commercial, research, institutional, or other licenses
+are available from Sabinok Corporation; contact Simson Garfinkel for
+information.
+
+Substantive outside pull requests require a signed contributor license agreement
+before merge so that Sabinok Corporation can continue to offer alternate
+licenses. Contributors keep their copyright.
 
 ## Notes
 

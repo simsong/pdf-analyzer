@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Sabinok Corporation
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from types import SimpleNamespace
 
 from pdf_analyzer.pricing import fetch_pricing_snapshot
