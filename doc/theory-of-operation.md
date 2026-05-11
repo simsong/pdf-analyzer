@@ -33,6 +33,8 @@ Optional fields include:
 - `name_clustering`
 - `ignore_dirs_containing`
 - `report_html_filename`
+- `flatten_pdf`
+- `flatten_dpi`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
@@ -57,8 +59,9 @@ The analyzer writes the following durable outputs into `output_directory`:
 - `pdf_analyzer.sqlite3`
 - the configured HTML report, defaulting to `report.html`
 - `report.xlsx`
-- `pdfs/` containing copied responsive PDFs only; copied PDFs with encryption, JavaScript, interactive forms, or external file dependencies are converted to PDF/A-2b before report links are written
+- `pdfs/` containing copied responsive PDFs only; copied PDFs that are not valid PDF/A or that fail cross-domain policy checks are normalized to PDF/A before report links are written
 - `.pdfdata` output marker JSON
+- `.gitignore` containing `*`, so generated output directories are ignored when they live inside the repository
 - a copy of the YAML config
 
 The SQLite database stores:
@@ -184,7 +187,7 @@ The HTML report is operator-facing and emphasizes fast review:
 - `Responsive Evidence Timeline`
   Displays one card per responsive evidence row, ordered chronologically, with date pill, key-person pill, page or page-range link into the copied PDF, canonical people list, and a link to the responsive-document entry.
 - `Responsive Documents`
-  Lists only responsive PDFs copied into `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names. Report PDF copies are inspected with `pypdf`; copies with encryption, JavaScript, interactive forms, or external file dependencies are converted to PDF/A-2b with Ghostscript before the report links to them.
+  Lists only responsive PDFs copied into `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names. Report PDF copies are validated with veraPDF and inspected with `pypdf`; copies that are not valid PDF/A or contain JavaScript, encryption, signatures, embedded files, launch actions, multimedia, external file streams, interactive forms, or URI actions are normalized to PDF/A with Ghostscript before the report links to them. `flatten_pdf: true` uses Ghostscript bitmap rendering at `flatten_dpi` before PDF/A normalization.
 - `Errors`
   Combines failures and unanalyzed PDFs in one operator-facing section while still distinguishing the two categories.
 

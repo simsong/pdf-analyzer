@@ -42,14 +42,18 @@ question: What does this archive say about bridge safety?
 name_clustering: local
 ignore_dirs_containing: .pdfdata
 report_html_filename: report.html
+flatten_pdf: false
+flatten_dpi: 300
 schema_version: v1
 ```
 
-Optional overrides such as `model`, `workers`, `oversize_strategy`, `name_clustering`, `ignore_dirs_containing`, `report_html_filename`, `prompt_version`, `schema_version`, and `synthesis_prompt_version` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
+Optional overrides such as `model`, `workers`, `oversize_strategy`, `name_clustering`, `ignore_dirs_containing`, `report_html_filename`, `flatten_pdf`, `flatten_dpi`, `prompt_version`, `schema_version`, and `synthesis_prompt_version` are also supported. `name_clustering` defaults to `local` and also supports `gemini`.
 
 `ignore_dirs_containing` controls recursive PDF discovery. It may be one marker filename or a list of marker filenames. Any scanned directory containing one of those files is skipped, including all of its children. The default is `.pdfdata`; each run writes that hidden JSON marker into `output_directory`, so an output directory inside the PDF archive is not rescanned as source input.
 
 `report_html_filename` controls the HTML report filename inside `output_directory`. It defaults to `report.html` and must be a filename, not a path.
+
+Report PDF copies are normalized to PDF/A when veraPDF reports non-compliance or policy checks detect JavaScript, encryption, signatures, embedded files, launch actions, multimedia, external file streams, interactive forms, or URI actions. `flatten_pdf` defaults to `false`; when set to `true`, normalization renders pages to bitmap PDF at `flatten_dpi` before producing PDF/A.
 
 ## Extraction Schema
 
@@ -100,8 +104,9 @@ Each project run writes durable artifacts into `output_directory`:
 - `pdf_analyzer.sqlite3`
 - the configured HTML report, defaulting to `report.html`
 - `report.xlsx`
-- `pdfs/` containing copied responsive PDFs only; copies with encryption, JavaScript, interactive forms, or external file dependencies are converted to PDF/A-2b before being linked
+- `pdfs/` containing copied responsive PDFs only; copies that are not valid PDF/A or that fail cross-domain policy checks are normalized to PDF/A before being linked
 - `.pdfdata` containing output metadata such as the run timestamp
+- `.gitignore` containing `*`, so generated output stays untracked when the output directory is inside the repository
 - a copy of the YAML config used for the run
 
 Intermediate prepared PDFs are written to a temporary directory for the duration of the run and are not kept afterward.
@@ -133,7 +138,8 @@ Intermediate prepared PDFs are written to a temporary directory for the duration
 
 - `uv run analyze ...` is the preferred CLI.
 - `uv run pdf-analyzer ...` remains as a compatibility alias.
-- Ghostscript (`gs`) must be installed and on `PATH`; startup and `make check` fail early when it is missing.
+- `uv run pdfa-fix file1.pdf file2.pdf` checks listed files, normalizes flagged PDFs to PDF/A in place, and prints only normalized paths and non-PDF input paths.
+- Ghostscript (`gs`) and veraPDF (`verapdf`) must be installed and on `PATH`; startup and `make check` fail early when either is missing.
 - The only runtime environment variable currently used by the application code is `GEMINI_API_KEY`.
 - A successful rerun with no new work reuses cached per-document analyses and cached project synthesis, then re-renders the reports.
 - Cache reuse is keyed by the configured versions plus automatic prompt/schema fingerprints, so structural model-output changes invalidate old cached analyses even if you forget to bump YAML version strings.

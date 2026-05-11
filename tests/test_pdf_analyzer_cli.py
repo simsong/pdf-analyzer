@@ -31,6 +31,7 @@ def test_write_output_marker_records_timestamp(tmp_path: Path) -> None:
 
     assert set(payload) == {"timestamp"}
     datetime.fromisoformat(payload["timestamp"])
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
 
 def test_list_models_prints_available_models_and_prices(monkeypatch, capsys) -> None:

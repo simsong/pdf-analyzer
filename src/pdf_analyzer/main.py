@@ -14,6 +14,7 @@ from .cache_identity import build_query_identity
 from .config import ProjectConfig
 from .constants import (
     DEFAULT_DATABASE_NAME,
+    DEFAULT_OUTPUT_GITIGNORE_FILENAME,
     DEFAULT_MODEL,
     DEFAULT_OUTPUT_MARKER_FILENAME,
     DEFAULT_OVERSIZE_STRATEGY,
@@ -34,7 +35,7 @@ from .gemini import (
     synthesize_project,
     usage_to_cost_fields,
 )
-from .pdfa_tools import PDFAConversionError, ensure_ghostscript_available
+from .pdfa_tools import PDFAConversionError, ensure_pdf_security_tools_available
 from .pdf_tools import PDFInspector, prepare_candidates_for_upload
 from .pricing import (
     DEFAULT_PRICING_FETCHER,
@@ -194,6 +195,7 @@ def write_output_marker(output_directory: Path) -> None:
         output_directory / DEFAULT_OUTPUT_MARKER_FILENAME,
         {"timestamp": utc_now_iso()},
     )
+    (output_directory / DEFAULT_OUTPUT_GITIGNORE_FILENAME).write_text("*\n", encoding="utf-8")
 
 
 def scan_archive(db: Database, config: ProjectConfig) -> list[dict[str, Any]]:
@@ -549,16 +551,16 @@ def maybe_skip_documents_for_no_gemini(
 def main() -> int:
     args = parse_args()
     configure_logging(args.verbose)
-    try:
-        ensure_ghostscript_available()
-    except PDFAConversionError as exc:
-        raise SystemExit(f"ERROR: {exc}") from exc
 
     if args.list_models:
         list_models_with_pricing()
         return 0
 
     config = ProjectConfig.from_path(args.config)
+    try:
+        ensure_pdf_security_tools_available(flatten_pdf=config.flatten_pdf)
+    except PDFAConversionError as exc:
+        raise SystemExit(f"ERROR: {exc}") from exc
     model_name = args.model or config.model or DEFAULT_MODEL
     workers = args.workers or config.workers or DEFAULT_WORKERS
     oversize_strategy = args.oversize_strategy or config.oversize_strategy or DEFAULT_OVERSIZE_STRATEGY
@@ -871,6 +873,8 @@ def main() -> int:
                 name_clustering_method=config.name_clustering,
                 allow_gemini=not args.no_gemini,
                 report_html_filename=config.report_html_filename,
+                flatten_pdf=config.flatten_pdf,
+                flatten_dpi=config.flatten_dpi,
                 run_summary=run_summary,
             )
             db.finalize_run(

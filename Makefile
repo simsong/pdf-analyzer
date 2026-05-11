@@ -8,5 +8,7 @@ check: check-system-deps
 
 check-system-deps:
 	@command -v gs >/dev/null || { echo "ERROR: Ghostscript (gs) is required but was not found in PATH." >&2; exit 1; }
+	@command -v verapdf >/dev/null || { echo "ERROR: veraPDF (verapdf) is required but was not found in PATH." >&2; exit 1; }
 	@printf 'Ghostscript '
 	@gs --version
+	@verapdf --version | head -1

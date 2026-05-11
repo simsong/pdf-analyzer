@@ -34,6 +34,8 @@ class ProjectConfig(BaseModel):
         default_factory=lambda: [DEFAULT_OUTPUT_MARKER_FILENAME],
     )
     report_html_filename: str = DEFAULT_REPORT_HTML
+    flatten_pdf: bool = False
+    flatten_dpi: int = 300
     prompt_version: str = DEFAULT_PROMPT_VERSION
     schema_version: str = DEFAULT_SCHEMA_VERSION
     synthesis_prompt_version: str = DEFAULT_SYNTHESIS_PROMPT_VERSION
@@ -79,6 +81,8 @@ class ProjectConfig(BaseModel):
                 "name_clustering must be one of "
                 f"{sorted(SUPPORTED_NAME_CLUSTERING_METHODS)}, got {self.name_clustering!r}"
             )
+        if self.flatten_dpi <= 0:
+            raise ValueError("flatten_dpi must be positive")
         for marker_filename in self.ignore_dirs_containing:
             if not marker_filename.strip():
                 raise ValueError("ignore_dirs_containing marker filenames must be non-empty")

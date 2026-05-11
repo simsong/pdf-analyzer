@@ -5,6 +5,8 @@ question: What does this archive say about bridge safety?
 schema_version: v1
 ignore_dirs_containing: .pdfdata
 report_html_filename: report.html
+flatten_pdf: false
+flatten_dpi: 300
 
 # Default extraction schema for schema_version: v1.
 # This schema is built into src/pdf_analyzer/models.py. The config file uses

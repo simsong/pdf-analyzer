@@ -20,6 +20,8 @@ def test_project_config_defaults_name_clustering_to_local() -> None:
     assert config.name_clustering == "local"
     assert config.ignore_dirs_containing == [".pdfdata"]
     assert config.report_html_filename == "report.html"
+    assert config.flatten_pdf is False
+    assert config.flatten_dpi == 300
 
 
 def test_project_config_accepts_single_ignore_marker() -> None:
@@ -61,6 +63,22 @@ def test_project_config_accepts_custom_report_html_filename() -> None:
     assert config.report_html_filename == "wag-insider.html"
 
 
+def test_project_config_accepts_pdf_flattening_options() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "name": "Example",
+            "pdf_directory": ".",
+            "output_directory": ".",
+            "question": "What happened?",
+            "flatten_pdf": True,
+            "flatten_dpi": 400,
+        }
+    )
+
+    assert config.flatten_pdf
+    assert config.flatten_dpi == 400
+
+
 def test_project_config_rejects_report_html_path() -> None:
     try:
         ProjectConfig.model_validate(
@@ -93,6 +111,23 @@ def test_project_config_rejects_report_html_filename_with_outer_whitespace() -> 
         assert "leading or trailing whitespace" in str(exc)
         return
     raise AssertionError("Expected report_html_filename with whitespace to be rejected")
+
+
+def test_project_config_rejects_non_positive_flatten_dpi() -> None:
+    try:
+        ProjectConfig.model_validate(
+            {
+                "name": "Example",
+                "pdf_directory": ".",
+                "output_directory": ".",
+                "question": "What happened?",
+                "flatten_dpi": 0,
+            }
+        )
+    except ValidationError as exc:
+        assert "flatten_dpi must be positive" in str(exc)
+        return
+    raise AssertionError("Expected non-positive flatten_dpi to be rejected")
 
 
 def test_project_config_rejects_directory_path_with_outer_whitespace() -> None:

@@ -30,6 +30,8 @@ Important optional controls include:
 - `name_clustering`
 - `ignore_dirs_containing`
 - `report_html_filename`
+- `flatten_pdf`
+- `flatten_dpi`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
