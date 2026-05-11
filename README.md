@@ -25,7 +25,7 @@ uv sync
 Run the analyzer with a YAML config:
 
 ```bash
-uv run analyze pdf-analyzer.example.yaml
+uv run pdf-analyzer pdf-analyzer.example.yaml
 ```
 
 Runtime environment:
@@ -156,8 +156,7 @@ licenses. Contributors keep their copyright.
 
 ## Notes
 
-- `uv run analyze ...` is the preferred CLI.
-- `uv run pdf-analyzer ...` remains as a compatibility alias.
+- `uv run pdf-analyzer ...` is the preferred CLI.
 - `uv run pdfa-fix file1.pdf file2.pdf` checks listed files, normalizes flagged PDFs to PDF/A in place, and prints only normalized paths and non-PDF input paths.
 - Ghostscript (`gs`) and veraPDF (`verapdf`) must be installed and on `PATH`; startup and `make check` fail early when either is missing.
 - The only runtime environment variable currently used by the application code is `GEMINI_API_KEY`.

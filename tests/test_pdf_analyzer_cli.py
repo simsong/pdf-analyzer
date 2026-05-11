@@ -77,7 +77,7 @@ def test_list_models_prints_available_models_and_prices(monkeypatch, capsys) -> 
             {},
         ),
     )
-    monkeypatch.setattr(sys, "argv", ["analyze", "--list-models"])
+    monkeypatch.setattr(sys, "argv", ["pdf-analyzer", "--list-models"])
 
     exit_code = main()
 
@@ -110,7 +110,7 @@ def test_list_models_fails_when_pricing_refresh_fails(monkeypatch) -> None:
             PricingSnapshotError("pricing unavailable")
         ),
     )
-    monkeypatch.setattr(sys, "argv", ["analyze", "--list-models"])
+    monkeypatch.setattr(sys, "argv", ["pdf-analyzer", "--list-models"])
 
     try:
         main()

@@ -26,7 +26,6 @@ dependencies = [
 ]
 
 [project.scripts]
-analyze = "pdf_analyzer.main:main"
 pdf-analyzer = "pdf_analyzer.main:main"
 pdfa-fix = "pdf_analyzer.pdfa_tools:main"
 

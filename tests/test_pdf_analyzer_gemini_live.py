@@ -92,7 +92,7 @@ def test_pdf_analyzer_live_single_pdf(tmp_path: Path, monkeypatch: pytest.Monkey
         sys,
         "argv",
         [
-            "analyze",
+            "pdf-analyzer",
             str(config_path),
             "--limit",
             "1",

@@ -27,7 +27,7 @@ Observed gaps:
 
 - No `LICENSE` file is present.
 - `pyproject.toml` does not declare project license metadata.
-- The repository is named `sabinok-pdf`, but the package and public CLI names are currently `pdf-analyzer`, `pdf_analyzer`, and `analyze`. The generic `analyze` command is convenient locally but weak as a public command name.
+- The repository is now `github.com/sabinok/pdf-analyzer`, the program name is `pdf-analyzer`, and the formal product name is Sabinok PDF Analyzer.
 - `README.md` references `pdf-analyzer.example.yaml`, but that example file is not currently present.
 - The only source scanner is the local filesystem path in `pdf_directory`.
 - The report and examples need shareable screenshots or generated artifacts suitable for an announcement.
@@ -57,15 +57,13 @@ Before announcement, choose the public name and make the names line up.
 
 Recommended public surface:
 
-- Project name: `sabinok-pdf`
+- Project name: Sabinok PDF Analyzer
 - Python package: keep `pdf_analyzer` for now unless a package rename is worth the churn
-- Preferred CLI: `sabinok-pdf`
-- Compatibility CLI: keep `pdf-analyzer`
-- Local convenience alias: keep or de-emphasize `analyze`
+- Preferred CLI: `pdf-analyzer`
 
 Packaging work:
 
-- update `pyproject.toml` name if the package will be published as `sabinok-pdf`
+- keep `pyproject.toml` package name as `pdf-analyzer`
 - add license metadata
 - add project URLs if there is a public repository, issue tracker, or documentation site
 - add `CHANGELOG.md`
