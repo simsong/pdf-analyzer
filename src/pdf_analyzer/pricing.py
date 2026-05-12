@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -18,6 +19,14 @@ from .exceptions import PricingSnapshotError
 PRICING_OBJECT_NAME = "gemini-prices.google.com"
 DEFAULT_PRICING_SOURCE_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 DEFAULT_PRICING_FETCHER = "pdf_analyzer.pricing.fetch_pricing_snapshot"
+PRICING_MODELS_KEY = "models"
+PRICING_DISPLAY_NAME_KEY = "display_name"
+PRICING_ALIASES_KEY = "aliases"
+PRICING_STANDARD_KEY = "standard"
+PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY = "input_usd_per_million_tokens"
+PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY = "output_usd_per_million_tokens"
+PRICING_NOTES_KEY = "notes"
+VERSIONED_MODEL_SUFFIX_RE = re.compile(r"^-\d{3,}(?:$|-)")
 
 
 @dataclass(frozen=True)
@@ -25,6 +34,16 @@ class ModelPricing:
     model_name: str
     input_usd_per_million_tokens: float
     output_usd_per_million_tokens: float
+
+
+class ModelPricingDisplay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str
+    matched_model_name: str | None = None
+    input_usd_per_million_tokens: float | None = None
+    output_usd_per_million_tokens: float | None = None
+    basis: str
 
 
 @dataclass(frozen=True)
@@ -98,13 +117,13 @@ def extract_pricing_snapshot_with_gemini(
     models: dict[str, Any] = {}
     for item in extraction.models:
         entry = {
-            "display_name": item.display_name,
-            "aliases": item.aliases,
-            "standard": {
-                "input_usd_per_million_tokens": item.standard_input_usd_per_million_tokens,
-                "output_usd_per_million_tokens": item.standard_output_usd_per_million_tokens,
+            PRICING_DISPLAY_NAME_KEY: item.display_name,
+            PRICING_ALIASES_KEY: item.aliases,
+            PRICING_STANDARD_KEY: {
+                PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY: item.standard_input_usd_per_million_tokens,
+                PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY: item.standard_output_usd_per_million_tokens,
             },
-            "notes": item.notes,
+            PRICING_NOTES_KEY: item.notes,
         }
         for alias in item.aliases:
             models[alias] = entry
@@ -115,7 +134,7 @@ def extract_pricing_snapshot_with_gemini(
         "pricing_mode": "standard",
         "parsed_by_model": model_name,
         "notes": extraction.notes,
-        "models": models,
+        PRICING_MODELS_KEY: models,
     }
 
 
@@ -146,7 +165,7 @@ def fetch_pricing_snapshot(
         )
     except (HTTPError, URLError, OSError) as exc:
         raise PricingSnapshotError(str(exc)) from exc
-    if not payload["models"]:
+    if not payload[PRICING_MODELS_KEY]:
         raise PricingSnapshotError(
             f"No Gemini model prices could be extracted from {source_url}"
         )
@@ -160,25 +179,104 @@ def fetch_pricing_snapshot(
     return payload, metadata
 
 
-def get_model_pricing(pricing_snapshot: dict[str, Any], model_name: str) -> ModelPricing:
-    models = pricing_snapshot.get("models", {})
-    if model_name in models:
-        pricing = models[model_name]["standard"]
-        return ModelPricing(
+def _find_model_pricing_payload(
+    pricing_snapshot: dict[str, Any],
+    model_name: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    models = pricing_snapshot.get(PRICING_MODELS_KEY, {})
+    if not isinstance(models, dict):
+        return None, None
+
+    direct_payload = models.get(model_name)
+    if isinstance(direct_payload, dict):
+        return model_name, direct_payload
+
+    versioned_matches = []
+    for known_model, payload in models.items():
+        if not isinstance(known_model, str) or not isinstance(payload, dict):
+            continue
+        suffix = model_name.removeprefix(known_model)
+        if suffix != model_name and VERSIONED_MODEL_SUFFIX_RE.fullmatch(suffix):
+            versioned_matches.append((len(known_model), known_model, payload))
+    if not versioned_matches:
+        return None, None
+    _, known_model, payload = max(versioned_matches, key=lambda item: item[0])
+    return known_model, payload
+
+
+def _missing_pricing_basis(model_name: str) -> str:
+    if model_name.endswith("-latest"):
+        return "latest alias; no fixed price in snapshot"
+    if "preview" in model_name:
+        return "preview price not found in snapshot"
+    return "standard token price not found"
+
+
+def describe_model_pricing(
+    pricing_snapshot: dict[str, Any],
+    model_name: str,
+) -> ModelPricingDisplay:
+    matched_model_name, payload = _find_model_pricing_payload(pricing_snapshot, model_name)
+    if payload is None:
+        return ModelPricingDisplay(
             model_name=model_name,
-            input_usd_per_million_tokens=float(pricing["input_usd_per_million_tokens"]),
-            output_usd_per_million_tokens=float(pricing["output_usd_per_million_tokens"]),
+            basis=_missing_pricing_basis(model_name),
         )
 
-    for known_model, payload in models.items():
-        if model_name.startswith(known_model):
-            pricing = payload["standard"]
-            return ModelPricing(
-                model_name=known_model,
-                input_usd_per_million_tokens=float(pricing["input_usd_per_million_tokens"]),
-                output_usd_per_million_tokens=float(pricing["output_usd_per_million_tokens"]),
-            )
+    pricing = payload.get(PRICING_STANDARD_KEY)
+    if not isinstance(pricing, dict):
+        return ModelPricingDisplay(
+            model_name=model_name,
+            matched_model_name=matched_model_name,
+            basis="pricing entry has no standard token prices",
+        )
 
+    try:
+        input_price = (
+            float(pricing[PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY])
+            if pricing.get(PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY) is not None
+            else None
+        )
+        output_price = (
+            float(pricing[PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY])
+            if pricing.get(PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY) is not None
+            else None
+        )
+    except (KeyError, TypeError, ValueError):
+        input_price = None
+        output_price = None
+
+    basis_parts = [
+        "standard token pricing"
+        if input_price is not None and output_price is not None
+        else "standard token price incomplete"
+    ]
+    if matched_model_name and matched_model_name != model_name:
+        basis_parts.append(f"version of {matched_model_name}")
+    notes = payload.get(PRICING_NOTES_KEY)
+    if notes:
+        basis_parts.append(str(notes))
+
+    return ModelPricingDisplay(
+        model_name=model_name,
+        matched_model_name=matched_model_name,
+        input_usd_per_million_tokens=input_price,
+        output_usd_per_million_tokens=output_price,
+        basis="; ".join(basis_parts),
+    )
+
+
+def get_model_pricing(pricing_snapshot: dict[str, Any], model_name: str) -> ModelPricing:
+    pricing = describe_model_pricing(pricing_snapshot, model_name)
+    if (
+        pricing.input_usd_per_million_tokens is not None
+        and pricing.output_usd_per_million_tokens is not None
+    ):
+        return ModelPricing(
+            model_name=pricing.matched_model_name or model_name,
+            input_usd_per_million_tokens=pricing.input_usd_per_million_tokens,
+            output_usd_per_million_tokens=pricing.output_usd_per_million_tokens,
+        )
     raise ValueError(f"No pricing configured for model {model_name!r}")
 
 

@@ -29,7 +29,7 @@ Observed gaps:
 - `pyproject.toml` does not declare project license metadata.
 - The repository is now `github.com/sabinok/pdf-analyzer`, the program name is `pdf-analyzer`, and the formal product name is Sabinok PDF Analyzer.
 - `README.md` references `pdf-analyzer.example.yaml`, but that example file is not currently present.
-- The only source scanner is the local filesystem path in `pdf_directory`.
+- The only source scanner is the local filesystem input path list in `pdf_directory`.
 - The report and examples need shareable screenshots or generated artifacts suitable for an announcement.
 - Public documentation should explain that uploaded PDFs and extracted facts are sent to Gemini during non-`--no-gemini` runs.
 - The project requires Python `>=3.13`, while `pyright` is configured for Python `3.12`; this should be reconciled before launch.
@@ -126,7 +126,7 @@ question: What does this archive say about bridge safety?
 
 Backward compatibility:
 
-- Existing `pdf_directory` configs should continue to work by mapping to `document_source: {type: local, path: ...}`.
+- Existing `pdf_directory` configs should continue to work by mapping each configured input to `document_source: {type: local, path: ...}`.
 - New docs should prefer `document_source`.
 
 Proposed source descriptor:
@@ -163,7 +163,7 @@ Launch implementation sequence:
 
 | Source | Launch stance | Authentication and implementation notes |
 | --- | --- | --- |
-| Local files | Fully supported | Current behavior. Recursively scan a directory, skip directories containing configured marker files, and process `*.pdf`. |
+| Local files | Fully supported | Current behavior. Accept one local PDF file or directory, or a list of them; recursively scan directories, skip directories containing configured marker files, and process `*.pdf`. |
 | AWS S3 | Best first cloud provider | No OAuth app registration is needed. Use normal AWS credentials from the environment/profile/role. List with `ListObjectsV2` and `Prefix`, paginate, filter `.pdf`, then download objects to a run cache before analysis. |
 | Dropbox | Stub or later plugin | Dropbox API access is OAuth 2.0 based. For development, a generated access token may be usable, but production use should use a Dropbox app, scopes, short-lived access tokens, and refresh tokens. |
 | Google Drive | Stub unless OAuth is in scope | Private Drive files require OAuth 2.0 scopes and an OAuth client. For a desktop CLI, use an installed-app/desktop OAuth flow and store refresh tokens securely. API keys are not enough for private files. A service account works only for files or shared drives that grant it access, or for Workspace domain delegation. |
@@ -187,7 +187,7 @@ Required public docs:
 - README quick start with a real example config file.
 - Installation prerequisites for Python, `uv`, Ghostscript, and veraPDF.
 - Gemini setup and `GEMINI_API_KEY` handling.
-- "Data and privacy" section explaining local state, SQLite, copied responsive PDFs, and Gemini uploads.
+- "Data and privacy" section explaining local state, SQLite, cloned/copied responsive PDFs, and Gemini uploads.
 - Source plugin guide with local and S3 examples.
 - Example gallery page linking to the three example configs and generated reports.
 - Troubleshooting page for missing system dependencies, Gemini auth failures, oversized PDFs, and PDF/A conversion failures.
@@ -202,7 +202,7 @@ Good public roadmap items:
 - face extraction and clustering from PDF page images and embedded photographs
 - entity clustering beyond person names, including organizations, facilities, projects, and vessels
 - operator review UI for correcting responsive decisions, extracted facts, and name clusters
-- export packages that bundle reports, copied PDFs, config, database, and provenance metadata
+- export packages that bundle reports, cloned/copied PDFs, config, database, and provenance metadata
 - source plugins for Google Drive, Dropbox, and OneDrive
 - OCR and layout-aware extraction for scanned PDFs with weak embedded text
 - citation-quality evidence exports for articles, reports, and FOIA productions
@@ -220,7 +220,7 @@ Before public announcement:
 - Run one small fresh Gemini-backed example.
 - Verify the README quick start from a clean checkout.
 - Verify the included example config file path.
-- Verify generated report links open copied responsive PDFs.
+- Verify generated report links open cloned/copied responsive PDFs.
 - Verify the license text and project metadata.
 - Verify no private PDFs, credentials, generated databases, or reports are committed accidentally.
 - Tag the release and publish release notes.

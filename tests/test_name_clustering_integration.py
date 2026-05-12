@@ -21,10 +21,25 @@ def test_project_config_defaults_name_clustering_to_local() -> None:
         }
     )
     assert config.name_clustering == "local"
+    assert config.pdf_directory == [Path(".")]
     assert config.ignore_dirs_containing == [".pdfdata"]
     assert config.report_html_filename == "report.html"
+    assert config.normalize_pdf is False
     assert config.flatten_pdf is False
     assert config.flatten_dpi == 300
+
+
+def test_project_config_accepts_pdf_input_path_list() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "name": "Example",
+            "pdf_directory": ["./pdfs", "./more-pdfs"],
+            "output_directory": ".",
+            "question": "What happened?",
+        }
+    )
+
+    assert config.pdf_directory == [Path("pdfs"), Path("more-pdfs")]
 
 
 def test_project_config_accepts_single_ignore_marker() -> None:
@@ -66,18 +81,20 @@ def test_project_config_accepts_custom_report_html_filename() -> None:
     assert config.report_html_filename == "wag-insider.html"
 
 
-def test_project_config_accepts_pdf_flattening_options() -> None:
+def test_project_config_accepts_pdf_normalization_options() -> None:
     config = ProjectConfig.model_validate(
         {
             "name": "Example",
             "pdf_directory": ".",
             "output_directory": ".",
             "question": "What happened?",
+            "normalize_pdf": True,
             "flatten_pdf": True,
             "flatten_dpi": 400,
         }
     )
 
+    assert config.normalize_pdf
     assert config.flatten_pdf
     assert config.flatten_dpi == 400
 
@@ -149,6 +166,22 @@ def test_project_config_rejects_directory_path_with_outer_whitespace() -> None:
     raise AssertionError("Expected output_directory with trailing whitespace to be rejected")
 
 
+def test_project_config_rejects_pdf_input_path_list_entry_with_outer_whitespace() -> None:
+    try:
+        ProjectConfig.model_validate(
+            {
+                "name": "Example",
+                "pdf_directory": [".", "bad-input "],
+                "output_directory": ".",
+                "question": "What happened?",
+            }
+        )
+    except ValidationError as exc:
+        assert "pdf_directory paths must not have leading or trailing whitespace" in str(exc)
+        return
+    raise AssertionError("Expected pdf_directory list entry with trailing whitespace to be rejected")
+
+
 def test_project_config_from_path_rejects_quoted_trailing_whitespace(tmp_path: Path) -> None:
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
@@ -173,6 +206,33 @@ def test_project_config_from_path_rejects_quoted_trailing_whitespace(tmp_path: P
     else:
         raise AssertionError("Expected quoted trailing whitespace to be rejected")
     assert not (tmp_path / "pdf-insider ").exists()
+
+
+def test_project_config_from_path_resolves_pdf_input_path_list(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_file = tmp_path / "single.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4\n")
+    config_path = tmp_path / "project.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "name: Example",
+                "pdf_directory:",
+                "  - ./pdfs",
+                "  - ./single.pdf",
+                "output_directory: ./out",
+                "question: What happened?",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = ProjectConfig.from_path(config_path)
+
+    assert config.resolved_pdf_input_paths == [pdf_dir.resolve(), pdf_file.resolve()]
+    assert config.resolved_output_directory == (tmp_path / "out").resolve()
 
 
 def test_project_config_rejects_unknown_name_clustering_method() -> None:

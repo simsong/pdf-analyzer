@@ -13,6 +13,8 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
+
 from .cache_identity import build_query_identity
 from .config import ProjectConfig
 from .constants import (
@@ -43,13 +45,46 @@ from .pdf_tools import PDFInspector, prepare_candidates_for_upload
 from .pricing import (
     DEFAULT_PRICING_FETCHER,
     PRICING_OBJECT_NAME,
+    describe_model_pricing,
     fetch_pricing_snapshot,
-    get_model_pricing,
 )
 from .reporting import generate_reports
 from .utils import file_hashes, normalize_question, utc_now_iso, write_json
 
 LOGGER = logging.getLogger(__name__)
+PDF_ANALYSIS_GENERATE_CONTENT_ACTION = "generateContent"
+PDF_ANALYSIS_MODEL_PREFIX = "gemini-"
+PDF_ANALYSIS_EXCLUDED_MODEL_NAME_PARTS = (
+    "computer-use",
+    "embedding",
+    "image",
+    "live",
+    "native-audio",
+    "robotics",
+    "tts",
+)
+
+
+class ListedGeminiModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str
+    input_usd_per_million_tokens: float | None
+    output_usd_per_million_tokens: float | None
+    input_token_limit: int | None
+    output_token_limit: int | None
+    pricing_basis: str
+
+
+class DiscoveredPdfPath(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: Path
+    source_root: Path
+
+    @property
+    def relative_path(self) -> Path:
+        return self.path.relative_to(self.source_root)
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +119,60 @@ def _format_limit(value: Any) -> str:
     return f"{int(value):,}"
 
 
+def _model_name(model: Any) -> str:
+    return str(getattr(model, "name", "Unknown")).removeprefix("models/")
+
+
+def _model_limit(model: Any, attribute_name: str) -> int | None:
+    value = getattr(model, attribute_name, None)
+    if not value:
+        return None
+    return int(value)
+
+
+def _model_supports_generate_content(model: Any) -> bool:
+    actions = getattr(model, "supported_actions", None)
+    if actions is None:
+        return True
+    return any(
+        str(action).casefold() == PDF_ANALYSIS_GENERATE_CONTENT_ACTION.casefold()
+        for action in actions
+    )
+
+
+def _is_pdf_analysis_model(model: Any) -> bool:
+    model_name = _model_name(model)
+    if not model_name.startswith(PDF_ANALYSIS_MODEL_PREFIX):
+        return False
+    if any(part in model_name for part in PDF_ANALYSIS_EXCLUDED_MODEL_NAME_PARTS):
+        return False
+    return _model_supports_generate_content(model)
+
+
+def _build_listed_model_rows(
+    *,
+    models: list[Any],
+    pricing_snapshot: dict[str, Any],
+) -> list[ListedGeminiModel]:
+    rows = []
+    for model in models:
+        if not _is_pdf_analysis_model(model):
+            continue
+        model_name = _model_name(model)
+        pricing = describe_model_pricing(pricing_snapshot, model_name)
+        rows.append(
+            ListedGeminiModel(
+                model_name=model_name,
+                input_usd_per_million_tokens=pricing.input_usd_per_million_tokens,
+                output_usd_per_million_tokens=pricing.output_usd_per_million_tokens,
+                input_token_limit=_model_limit(model, "input_token_limit"),
+                output_token_limit=_model_limit(model, "output_token_limit"),
+                pricing_basis=pricing.basis,
+            )
+        )
+    return rows
+
+
 def list_models_with_pricing() -> None:
     client = build_client()
     try:
@@ -95,26 +184,27 @@ def list_models_with_pricing() -> None:
             list(client.models.list()),
             key=lambda model: getattr(model, "name", ""),
         )
-        print(
-            f"{'MODEL ID':<40} | {'INPUT $/1M':<10} | {'OUTPUT $/1M':<11} | "
-            f"{'INPUT LIMIT':<12} | {'OUTPUT LIMIT':<12}"
+        rows = _build_listed_model_rows(
+            models=all_models,
+            pricing_snapshot=pricing_snapshot or {},
         )
-        print("-" * 97)
-        for model in all_models:
-            raw_name = getattr(model, "name", "Unknown")
-            model_name = raw_name.replace("models/", "")
-            try:
-                pricing = get_model_pricing(pricing_snapshot or {}, model_name)
-                input_price = pricing.input_usd_per_million_tokens
-                output_price = pricing.output_usd_per_million_tokens
-            except ValueError:
-                input_price = None
-                output_price = None
+        model_id_width = max(
+            [len("MODEL ID"), *(len(row.model_name) for row in rows), 40]
+        )
+        print(
+            f"{'MODEL ID':<{model_id_width}} | {'INPUT $/1M':<10} | "
+            f"{'OUTPUT $/1M':<11} | {'INPUT LIMIT':<12} | {'OUTPUT LIMIT':<12} | "
+            "PRICE BASIS"
+        )
+        print("-" * (model_id_width + 82))
+        for row in rows:
             print(
-                f"{model_name:<40} | {_format_price(input_price):<10} | "
-                f"{_format_price(output_price):<11} | "
-                f"{_format_limit(getattr(model, 'input_token_limit', None)):<12} | "
-                f"{_format_limit(getattr(model, 'output_token_limit', None)):<12}"
+                f"{row.model_name:<{model_id_width}} | "
+                f"{_format_price(row.input_usd_per_million_tokens):<10} | "
+                f"{_format_price(row.output_usd_per_million_tokens):<11} | "
+                f"{_format_limit(row.input_token_limit):<12} | "
+                f"{_format_limit(row.output_token_limit):<12} | "
+                f"{row.pricing_basis}"
             )
     except PricingSnapshotError as exc:
         raise SystemExit(f"ERROR: Could not refresh Gemini pricing snapshot: {exc}") from exc
@@ -179,18 +269,33 @@ def directory_has_ignore_marker(directory: Path, marker_filenames: list[str]) ->
     return any((directory / marker_filename).is_file() for marker_filename in marker_filenames)
 
 
-def discover_pdf_paths(pdf_directory: Path, ignore_dirs_containing: list[str]) -> list[Path]:
-    pdf_paths: list[Path] = []
-    for directory, child_dirs, filenames in os.walk(pdf_directory):
-        directory_path = Path(directory)
-        if directory_has_ignore_marker(directory_path, ignore_dirs_containing):
-            child_dirs.clear()
+def discover_pdf_paths(
+    pdf_input_paths: list[Path],
+    ignore_dirs_containing: list[str],
+) -> list[DiscoveredPdfPath]:
+    pdf_paths: dict[Path, DiscoveredPdfPath] = {}
+    for input_path in pdf_input_paths:
+        resolved_input = Path(input_path).expanduser().resolve()
+        if resolved_input.is_file():
+            if resolved_input.suffix.casefold() == ".pdf":
+                pdf_paths[resolved_input] = DiscoveredPdfPath(
+                    path=resolved_input,
+                    source_root=resolved_input.parent,
+                )
             continue
-        for filename in filenames:
-            path = directory_path / filename
-            if path.suffix.casefold() == ".pdf" and path.is_file():
-                pdf_paths.append(path)
-    return sorted(pdf_paths)
+        for directory, child_dirs, filenames in os.walk(resolved_input):
+            directory_path = Path(directory)
+            if directory_has_ignore_marker(directory_path, ignore_dirs_containing):
+                child_dirs.clear()
+                continue
+            for filename in filenames:
+                path = (directory_path / filename).resolve()
+                if path.suffix.casefold() == ".pdf" and path.is_file():
+                    pdf_paths[path] = DiscoveredPdfPath(
+                        path=path,
+                        source_root=resolved_input,
+                    )
+    return sorted(pdf_paths.values(), key=lambda item: str(item.path))
 
 
 def write_output_marker(output_directory: Path) -> None:
@@ -204,17 +309,18 @@ def write_output_marker(output_directory: Path) -> None:
 def scan_archive(db: Database, config: ProjectConfig) -> list[dict[str, Any]]:
     now_iso = utc_now_iso()
     discovered: list[dict[str, Any]] = []
-    for pdf_path in discover_pdf_paths(
-        config.resolved_pdf_directory,
+    for discovered_pdf in discover_pdf_paths(
+        config.resolved_pdf_input_paths,
         config.ignore_dirs_containing,
     ):
+        pdf_path = discovered_pdf.path
         try:
             sha256, _, size_bytes = file_hashes(pdf_path)
             inspector = PDFInspector(pdf_path)
         except OSError as exc:
             LOGGER.warning("Skipping unreadable PDF %s: %s", pdf_path, exc)
             continue
-        relative_path = str(pdf_path.relative_to(config.resolved_pdf_directory))
+        relative_path = str(discovered_pdf.relative_path)
         db.upsert_document(
             sha256=sha256,
             file_size_bytes=size_bytes,
@@ -560,10 +666,11 @@ def main() -> int:
         return 0
 
     config = ProjectConfig.from_path(args.config)
-    try:
-        ensure_pdf_security_tools_available(flatten_pdf=config.flatten_pdf)
-    except PDFAConversionError as exc:
-        raise SystemExit(f"ERROR: {exc}") from exc
+    if config.normalize_pdf:
+        try:
+            ensure_pdf_security_tools_available(flatten_pdf=config.flatten_pdf)
+        except PDFAConversionError as exc:
+            raise SystemExit(f"ERROR: {exc}") from exc
     model_name = args.model or config.model or DEFAULT_MODEL
     workers = args.workers or config.workers or DEFAULT_WORKERS
     oversize_strategy = args.oversize_strategy or config.oversize_strategy or DEFAULT_OVERSIZE_STRATEGY
@@ -578,7 +685,12 @@ def main() -> int:
     db = Database(database_path)
     db.init_schema()
     db.set_metadata("project_name", config.name)
-    db.set_metadata("pdf_directory", str(config.resolved_pdf_directory))
+    resolved_pdf_inputs = [str(path) for path in config.resolved_pdf_input_paths]
+    db.set_metadata(
+        "pdf_directory",
+        resolved_pdf_inputs[0] if len(resolved_pdf_inputs) == 1 else json.dumps(resolved_pdf_inputs),
+    )
+    db.set_metadata("pdf_input_paths", json.dumps(resolved_pdf_inputs))
     db.set_metadata("question", config.question)
     db.set_metadata("name_clustering", config.name_clustering)
     query_identity = build_query_identity(
@@ -634,7 +746,7 @@ def main() -> int:
             LOGGER.info(
                 "Scanned %s PDFs under %s",
                 len(discovered_documents),
-                config.resolved_pdf_directory,
+                ", ".join(resolved_pdf_inputs),
             )
 
             pending_documents = []
@@ -876,6 +988,7 @@ def main() -> int:
                 name_clustering_method=config.name_clustering,
                 allow_gemini=not args.no_gemini,
                 report_html_filename=config.report_html_filename,
+                normalize_pdf=config.normalize_pdf,
                 flatten_pdf=config.flatten_pdf,
                 flatten_dpi=config.flatten_dpi,
                 run_summary=run_summary,

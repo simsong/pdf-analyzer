@@ -3,7 +3,15 @@
 
 from types import SimpleNamespace
 
-from pdf_analyzer.pricing import fetch_pricing_snapshot
+from pdf_analyzer.pricing import (
+    PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY,
+    PRICING_MODELS_KEY,
+    PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY,
+    PRICING_STANDARD_KEY,
+    describe_model_pricing,
+    fetch_pricing_snapshot,
+    get_model_pricing,
+)
 
 
 class _FakeHeaders(dict):
@@ -73,3 +81,31 @@ def test_fetch_pricing_snapshot_sends_full_html_to_gemini(monkeypatch) -> None:
     assert payload["source_url"] == "https://example.test/pricing"
     assert metadata["content_type"] == "text/html"
     assert observed["source_html"] == html
+
+
+def test_pricing_match_uses_version_suffix_not_family_prefix() -> None:
+    pricing_snapshot = {
+        PRICING_MODELS_KEY: {
+            "gemini-2.0-flash": {
+                PRICING_STANDARD_KEY: {
+                    PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY: 0.10,
+                    PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY: 0.40,
+                },
+            },
+            "gemini-2.0-flash-lite": {
+                PRICING_STANDARD_KEY: {
+                    PRICING_INPUT_USD_PER_MILLION_TOKENS_KEY: 0.075,
+                    PRICING_OUTPUT_USD_PER_MILLION_TOKENS_KEY: 0.30,
+                },
+            },
+        },
+    }
+
+    lite_pricing = get_model_pricing(pricing_snapshot, "gemini-2.0-flash-lite-001")
+    image_display = describe_model_pricing(pricing_snapshot, "gemini-2.0-flash-image")
+
+    assert lite_pricing.model_name == "gemini-2.0-flash-lite"
+    assert lite_pricing.input_usd_per_million_tokens == 0.075
+    assert image_display.input_usd_per_million_tokens is None
+    assert image_display.output_usd_per_million_tokens is None
+    assert image_display.basis == "standard token price not found"

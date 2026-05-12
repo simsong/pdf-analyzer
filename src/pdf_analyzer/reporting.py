@@ -468,6 +468,7 @@ def generate_reports(
     name_clustering_method: str,
     allow_gemini: bool,
     report_html_filename: str = DEFAULT_REPORT_HTML,
+    normalize_pdf: bool = False,
     flatten_pdf: bool = False,
     flatten_dpi: int = 300,
     run_summary: dict[str, Any] | None = None,
@@ -507,7 +508,8 @@ def generate_reports(
         report_name = unique_copy_name(row["canonical_filename"], used_names)
         target = pdf_dir / report_name
         clone_or_copy_file(source, target)
-        ensure_pdfa_if_needed(target, flatten_pdf=flatten_pdf, flatten_dpi=flatten_dpi)
+        if normalize_pdf:
+            ensure_pdfa_if_needed(target, flatten_pdf=flatten_pdf, flatten_dpi=flatten_dpi)
         linked_files[row["sha256"]] = f"pdfs/{report_name}"
 
     evidence_rows: list[dict[str, Any]] = []

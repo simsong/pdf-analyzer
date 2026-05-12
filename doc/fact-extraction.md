@@ -25,6 +25,8 @@ Each run is driven by one YAML file containing:
 - `output_directory`
 - `question`
 
+`pdf_directory` accepts one input path or a list of input paths. Each input path may be a PDF file or a directory scanned recursively for PDFs.
+
 Important optional controls include:
 
 - `model`
@@ -33,6 +35,7 @@ Important optional controls include:
 - `name_clustering`
 - `ignore_dirs_containing`
 - `report_html_filename`
+- `normalize_pdf`
 - `flatten_pdf`
 - `flatten_dpi`
 - `prompt_version`
@@ -58,7 +61,7 @@ When the analyzer is run with `--no-gemini`, it can regenerate reports from stor
 
 For each PDF that needs analysis, the system:
 
-1. scans the local archive and computes SHA-256 for the source PDF
+1. scans the configured PDF input paths and computes SHA-256 for the source PDF
 2. prepares one or more upload candidates
 3. reuses a still-valid Gemini upload when possible
 4. otherwise uploads the prepared candidate bytes
@@ -128,6 +131,8 @@ Gemini then returns a structured project answer with:
 ## Reporting Outputs
 
 The extracted facts drive both `report.html` and `report.xlsx`.
+
+Responsive PDFs are materialized into the report output. When `normalize_pdf` is false, report PDFs are copy-on-write clones where supported, falling back to ordinary copies. When `normalize_pdf` is true, copied report PDFs are normalized to PDF/A when local validation finds PDF/A non-compliance or cross-domain policy risks.
 
 Important HTML sections and the facts they use:
 

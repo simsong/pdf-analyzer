@@ -34,6 +34,32 @@ class EmptyReportDb:
         }
 
 
+class OneResponsiveDocumentReportDb(EmptyReportDb):
+    def __init__(self, source_path: Path) -> None:
+        self.source_path = source_path
+
+    def report_document_rows(self, query_id: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "sha256": "abc123",
+                "canonical_filename": self.source_path.name,
+                "relative_path": self.source_path.name,
+                "source_path": str(self.source_path),
+                "status": "succeeded",
+                "responsive": 1,
+                "relevance_score": 10,
+                "summary": "Responsive document.",
+                "people_json": "[]",
+                "places_json": "[]",
+                "dates_json": "[]",
+                "evidence_count": 0,
+                "failure_type": None,
+                "error_text": None,
+                "stored_page_count": 1,
+            }
+        ]
+
+
 def test_responsive_documents_index_includes_page_count() -> None:
     document_rows = [
         {
@@ -84,3 +110,22 @@ def test_generate_reports_uses_custom_html_filename(tmp_path: Path) -> None:
     assert not (tmp_path / "report.html").exists()
     assert xlsx_path == tmp_path / "report.xlsx"
     assert xlsx_path.exists()
+
+
+def test_generate_reports_skips_pdf_normalization_by_default(tmp_path: Path) -> None:
+    source_pdf = tmp_path / "not-really-a.pdf"
+    source_pdf.write_bytes(b"not a pdf\n")
+    output_dir = tmp_path / "out"
+
+    generate_reports(
+        db=OneResponsiveDocumentReportDb(source_pdf),
+        query_id=1,
+        output_dir=output_dir,
+        question="What happened?",
+        project_name="Example",
+        model_name="gemini-3-flash-preview",
+        name_clustering_method="local",
+        allow_gemini=False,
+    )
+
+    assert (output_dir / "pdfs" / source_pdf.name).read_bytes() == b"not a pdf\n"

@@ -36,13 +36,14 @@ Optional fields include:
 - `name_clustering`
 - `ignore_dirs_containing`
 - `report_html_filename`
+- `normalize_pdf`
 - `flatten_pdf`
 - `flatten_dpi`
 - `prompt_version`
 - `schema_version`
 - `synthesis_prompt_version`
 
-One YAML file corresponds to one SQLite database and one output directory.
+`pdf_directory` accepts one input path or a list of input paths. Each input path may be a PDF file or a directory scanned recursively for PDFs. One YAML file corresponds to one SQLite database and one output directory.
 The configured version strings are still supported, but the analyzer also computes automatic prompt/schema fingerprints so cache invalidation follows actual structural changes.
 
 ## Runtime Environment
@@ -62,7 +63,7 @@ The analyzer writes the following durable outputs into `output_directory`:
 - `pdf_analyzer.sqlite3`
 - the configured HTML report, defaulting to `report.html`
 - `report.xlsx`
-- `pdfs/` containing copied responsive PDFs only; copied PDFs that are not valid PDF/A or that fail cross-domain policy checks are normalized to PDF/A before report links are written
+- `pdfs/` containing responsive PDFs only; when `normalize_pdf` is false, these are copy-on-write clones where supported, falling back to ordinary copies; when `normalize_pdf` is true, copied PDFs that are not valid PDF/A or that fail cross-domain policy checks are normalized to PDF/A before report links are written
 - `.pdfdata` output marker JSON
 - `.gitignore` containing `*`, so generated output directories are ignored when they live inside the repository
 - a copy of the YAML config
@@ -85,7 +86,7 @@ Prepared upload candidates such as staged originals, chunks, and compressed vari
 
 1. Load the YAML config.
 2. Open or initialize `pdf_analyzer.sqlite3`.
-3. Recursively scan `pdf_directory` for PDFs, skipping any directory containing a configured `ignore_dirs_containing` marker file.
+3. Scan every configured `pdf_directory` input path for PDFs, recursing into directories and skipping any directory containing a configured `ignore_dirs_containing` marker file.
 4. Hash each PDF with SHA-256 and record the document and path metadata.
 5. Determine which PDFs still need analysis for the active query.
 6. For each pending PDF:
@@ -188,9 +189,9 @@ The HTML report is operator-facing and emphasizes fast review:
 - `People`
   Uses configurable name clustering to produce authoritative names. The default `local` strategy applies rule-based clustering; `gemini` sends the extracted name strings plus lightweight context to Gemini. The table is sorted by last name, and each disclosure row shows the exact matched extracted name form for each mention.
 - `Responsive Evidence Timeline`
-  Displays one card per responsive evidence row, ordered chronologically, with date pill, key-person pill, page or page-range link into the copied PDF, canonical people list, and a link to the responsive-document entry.
+  Displays one card per responsive evidence row, ordered chronologically, with date pill, key-person pill, page or page-range link into the report PDF, canonical people list, and a link to the responsive-document entry.
 - `Responsive Documents`
-  Lists only responsive PDFs copied into `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names. Report PDF copies are validated with veraPDF and inspected with `pypdf`; copies that are not valid PDF/A or contain JavaScript, encryption, signatures, embedded files, launch actions, multimedia, external file streams, interactive forms, or URI actions are normalized to PDF/A with Ghostscript before the report links to them. `flatten_pdf: true` uses Ghostscript bitmap rendering at `flatten_dpi` before PDF/A normalization.
+  Lists only responsive PDFs materialized in `output_directory/pdfs/`, with expandable evidence rows showing page links and authoritative names. When `normalize_pdf` is false, report PDF files are copy-on-write clones where supported, falling back to ordinary copies. When `normalize_pdf` is true, report PDF copies are validated with veraPDF and inspected with `pypdf`; copies that are not valid PDF/A or contain JavaScript, encryption, signatures, embedded files, launch actions, multimedia, external file streams, interactive forms, or URI actions are normalized to PDF/A with Ghostscript before the report links to them. `flatten_pdf: true` uses Ghostscript bitmap rendering at `flatten_dpi` before PDF/A normalization.
 - `Errors`
   Combines failures and unanalyzed PDFs in one operator-facing section while still distinguishing the two categories.
 
